@@ -12,16 +12,30 @@
 #
 # See docs/ARCHITECTURE.md for why each step below exists and which parts
 # are confirmed-working vs. still-open questions for this PoC.
+#
+# Base release: bootc's latest release requires libostree >= 2025.3.
+# Ubuntu's LTS releases don't clear that bar (24.04 "noble" ships 2024.5,
+# 22.04 "jammy" ships 2022.2) - only the 25.10 "questing" interim release
+# does, at 2025.6. That's why both stages below pin to 25.10 rather than
+# an LTS. See docs/ARCHITECTURE.md for the full version-gap writeup.
+ARG UBUNTU_RELEASE=25.10
 
 ########################################
 # Stage 1: build bootc from source
 ########################################
-FROM rust:1-bookworm AS bootc-builder
+FROM ubuntu:${UBUNTU_RELEASE} AS bootc-builder
+
+ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl git pkg-config \
+        ca-certificates curl git pkg-config build-essential \
         libostree-dev libssl-dev \
     && rm -rf /var/lib/apt/lists/*
+
+ENV CARGO_HOME=/usr/local/cargo
+ENV RUSTUP_HOME=/usr/local/rustup
+ENV PATH="${CARGO_HOME}/bin:${PATH}"
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
 
 # Ubuntu/Debian don't package bootc, so we build it from the latest
 # upstream release tag instead of pinning a version number by hand here.
@@ -37,7 +51,7 @@ RUN cargo build --release --bin bootc
 ########################################
 # Stage 2: the bootc-compatible Ubuntu image
 ########################################
-FROM ubuntu:24.04
+FROM ubuntu:${UBUNTU_RELEASE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 

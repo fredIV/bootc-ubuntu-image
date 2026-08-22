@@ -32,6 +32,26 @@ assumptions that Ubuntu doesn't meet out of the box:
 | Bootloader | Fedora's `grub2` carries a downstream patch for the [Boot Loader Specification (BLS)](https://uapi-group.org/specifications/specs/boot_loader_specification/), which is what ostree's grub backend writes/reads to manage multiple deployments | Upstream/Debian grub2 does **not** carry the BLS patch | **Open question - see below.** Plan A: try image-builder's BLS handling against plain Ubuntu grub and see exactly where it breaks. Plan B (fallback): move to a UKI (Unified Kernel Image) + systemd-boot, which is bootloader-agnostic and something Ubuntu already supports natively. |
 | SELinux labeling | Assumed by some of bootc's storage-separation hardening | Ubuntu defaults to AppArmor | Not fatal - bootc's core deploy/rollback logic doesn't hard-require SELinux, just loses some of that hardening. Documented as a known gap, not solved here. |
 
+**Confirmed finding (from an actual failed CI build, not a guess):** the
+latest `bootc` release requires `libostree >= 2025.3`. Checked against
+Ubuntu's package archive directly:
+
+| Release | `libostree-1-1` version | Meets bootc's `>= 2025.3`? |
+|---|---|---|
+| 22.04 "jammy" (LTS) | 2022.2 | No |
+| 24.04 "noble" (LTS) | 2024.5 | No |
+| 25.10 "questing" (interim) | 2025.6 | Yes |
+
+Neither current Ubuntu LTS release has a new enough `libostree` to build
+today's `bootc` against. This repo pins both build stages to Ubuntu 25.10
+(`UBUNTU_RELEASE` build arg in the `Containerfile`) to get a matching
+`libostree`/`bootc` pair. That's a real constraint worth being upfront
+about: as of today, this only works on an interim (non-LTS) Ubuntu release,
+with the LTS story depending on either Ubuntu backporting a newer
+`libostree` or `bootc` continuing to support older ones. Worth re-checking
+against future LTS releases (26.04 is due next) rather than assuming this
+stays true forever.
+
 The BLS/bootloader row is the one real unknown that determines whether this
 is viable at all versus needing a different bootloader strategy. Rather than
 guess at it in documentation, the CI pipeline in this repo is built to
