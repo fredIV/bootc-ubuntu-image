@@ -1,0 +1,119 @@
+name: build-and-test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-and-lint:
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build image
+        id: meta
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${{ github.repository }}:${{ github.sha }}"
+          docker build -f Containerfile -t "$IMAGE" -t local/bootc-ubuntu-image:test .
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      - name: bootc container lint (explicit, in addition to the in-build check)
+        run: docker run --rm local/bootc-ubuntu-image:test bootc container lint
+
+      - name: Push image
+        if: github.event_name != 'pull_request'
+        run: docker push "${{ steps.meta.outputs.image }}"
+
+  boot-test:
+    needs: build-and-lint
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM access for the runner
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Install QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build a bootable disk image with bootc-image-builder
+        run: |
+          set -euo pipefail
+          mkdir -p output
+          docker run --rm --privileged \
+            -v /var/lib/containers/storage:/var/lib/containers/storage \
+            -v "$PWD/output:/output" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            quay.io/centos-bootc/bootc-image-builder:latest \
+            --type qcow2 \
+            --local \
+            "${{ needs.build-and-lint.outputs.image }}"
+
+      - name: Boot the image in QEMU and check it comes up
+        run: |
+          set -euo pipefail
+          QCOW="$(find output -name '*.qcow2' | head -n1)"
+          test -n "$QCOW"
+          timeout 300 qemu-system-x86_64 \
+            -m 2048 -smp 2 \
+            -enable-kvm -cpu host \
+            -drive file="$QCOW",if=virtio,format=qcow2 \
+            -nographic -serial mon:stdio \
+            -display none \
+            | tee boot.log &
+          QEMU_PID=$!
+
+          # Wait for evidence of a working boot on the serial console rather
+          # than a fixed sleep. Ubuntu's default getty prompt is a
+          # reasonable "the system came up" signal for this first pass.
+          for i in $(seq 1 60); do
+            if grep -qE 'login:|Welcome to Ubuntu' boot.log 2>/dev/null; then
+              echo "Boot succeeded"
+              kill $QEMU_PID || true
+              exit 0
+            fi
+            sleep 5
+          done
+
+          echo "Timed out waiting for a successful boot; serial log follows:"
+          cat boot.log || true
+          kill $QEMU_PID || true
+          exit 1
+
+      - name: Upload boot log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-log
+          path: boot.log

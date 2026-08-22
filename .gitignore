@@ -1,0 +1,18 @@
+# Build output
+output/
+*.qcow2
+*.raw
+*.img
+boot.log
+
+# Local secrets / env - never commit real credentials or infra config
+.env
+.env.*
+*.pem
+*.key
+*credentials*
+kubeconfig*
+
+# Editor/OS cruft
+.DS_Store
+*.swp
