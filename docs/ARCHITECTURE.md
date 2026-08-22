@@ -306,6 +306,23 @@ the first place was our own choice, made in response to a soft lint
 *warning*, not a hard requirement, and turning it back off isn't a
 compromise on the actual thing this repo is testing.
 
+**Final data point, and the one that actually matters:** with
+`prepare-root.conf` present and composefs explicitly set to
+`enabled = false`, `bootc install to-disk` failed with the *exact same*
+`Creating imgstorage: Initializing images: No such file or directory` -
+byte for byte identical to the composefs-enabled failure. That rules out
+composefs as the cause entirely, in either direction: this "imgstorage"
+initialization step runs unconditionally in `bootc install to-disk`,
+regardless of which storage backend is configured, and fails the same way
+either way. Whatever it needs, it isn't composefs-specific, and it isn't
+something exposed by `bootc container lint`, `bootc --help`, or the
+public GitHub issues/docs searched over the course of this investigation.
+Diagnosing it further would mean reading bootc's Rust source directly
+(the `imgstorage`/`bootc_composefs` or equivalent module in
+`bootc-dev/bootc`) rather than treating it as a config or package problem
+- a reasonable next step, just a different kind of task than everything
+above it in this document.
+
 Worth being honest about: the earlier bootc-image-builder pivot reasoning
 was built on a wrong diagnosis. The pivot to `bootc install to-disk` was
 still the right call independently (it's the more direct test of the
@@ -325,7 +342,50 @@ and working end-to-end; the SELinux/rootfs/dracut findings above are about
 switching wouldn't avoid them. Worth revisiting once the unified tool
 stabilizes, but not blocking this PoC's goal.
 
-## Status
+## Status (as of this writing)
 
-Early-stage PoC. Read the Actions run history for current pass/fail state
-rather than assuming this README is up to date with it.
+**Proven, with real CI evidence (not assumption):**
+
+- An Ubuntu 25.10 base can be turned into a genuine `bootc`-compatible
+  container image: `bootc container lint` passes cleanly, meaning the
+  image satisfies bootc/ostree's actual filesystem contract (kernel/
+  initrd layout, `/sysroot` + `/ostree` symlink, install config,
+  container labels) - not a Fedora-only checklist. `build-and-lint` has
+  been green and reproducible across many runs.
+- `bootc` itself builds and runs fine against Ubuntu's packaged
+  `libostree` once the version floor is met (25.10, not the LTS
+  releases - see the version-gap table above).
+- `bootc install to-disk` - bootc's own native install path, no
+  Fedora-authored tooling involved - gets meaningfully far on Ubuntu: it
+  correctly identifies its own source image (via podman), partitions a
+  real disk with `sfdisk`, formats both the root filesystem (`mkfs.ext4`)
+  and the EFI System Partition (`mkfs.fat`), all using ordinary Ubuntu
+  packages (`fdisk`, `dosfstools`) that the Fedora ecosystem doesn't need
+  to think about but Ubuntu does.
+
+**Not yet resolved:**
+
+- `bootc install to-disk` fails immediately after disk formatting, at an
+  "imgstorage" initialization step, with `Creating imgstorage:
+  Initializing images: No such file or directory`. This happens
+  identically regardless of the composefs backend setting (tried both
+  enabled and explicitly disabled - see the writeup above), and nothing
+  in bootc's lint output, `--help`, or public documentation/issues found
+  during this investigation explains what file or directory it's looking
+  for. This blocks the actual boot test - the pipeline has not yet
+  produced a booted Ubuntu-as-bootc VM.
+
+**Net assessment:** the image-level compatibility question - can an
+Ubuntu base satisfy bootc's own contract - is answered *yes*, cleanly,
+and reproducibly. The install/deploy question - does bootc's disk
+installation logic run end-to-end on that image - is still open, blocked
+on one specific, unexplained failure inside bootc itself rather than on
+any Ubuntu-vs-Fedora packaging gap (every prior blocker in this document
+*was* exactly that kind of gap, and each was fixed the same way: find the
+missing tool, confirm the package via packages.ubuntu.com, install it).
+This one doesn't fit that pattern, which is why it's flagged here as a
+distinct, unresolved item rather than folded into the list above as
+"just another missing package."
+
+Read the Actions run history for current pass/fail state rather than
+assuming this document is up to date with it.
