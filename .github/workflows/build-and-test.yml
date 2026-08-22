@@ -28,13 +28,21 @@ jobs:
 
       - name: Build image
         id: meta
+        env:
+          DOCKER_BUILDKIT: "1"
+          GH_TOKEN_FOR_BUILD: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           # Docker image refs must be lowercase; the GitHub owner/repo isn't
           # guaranteed to be (this account is "fredIV").
           REPO_LOWER="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
           IMAGE="ghcr.io/${REPO_LOWER}:${{ github.sha }}"
-          docker build -f Containerfile -t "$IMAGE" -t local/bootc-ubuntu-image:test .
+          # Passed as a secret (not a build-arg) so it never lands in image
+          # history/cache - used inside the Containerfile only to avoid
+          # api.github.com's harsh unauthenticated rate limit.
+          docker build -f Containerfile \
+            --secret id=gh_token,env=GH_TOKEN_FOR_BUILD \
+            -t "$IMAGE" -t local/bootc-ubuntu-image:test .
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
       - name: bootc container lint (explicit, in addition to the in-build check)

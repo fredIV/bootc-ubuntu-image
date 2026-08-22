@@ -39,8 +39,14 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --pr
 
 # Ubuntu/Debian don't package bootc, so we build it from the latest
 # upstream release tag instead of pinning a version number by hand here.
-RUN set -eux; \
-    BOOTC_TAG="$(curl -fsSL https://api.github.com/repos/containers/bootc/releases/latest \
+# api.github.com rate-limits unauthenticated requests hard, and CI runner
+# IPs are shared, so this reads a token from a build secret when one is
+# provided (CI passes one; a local `docker build` without --secret still
+# works, just subject to the anonymous rate limit).
+RUN --mount=type=secret,id=gh_token set -eux; \
+    AUTH=""; \
+    if [ -s /run/secrets/gh_token ]; then AUTH="Authorization: Bearer $(cat /run/secrets/gh_token)"; fi; \
+    BOOTC_TAG="$(curl -fsSL ${AUTH:+-H "$AUTH"} https://api.github.com/repos/containers/bootc/releases/latest \
         | grep -m1 '"tag_name"' | cut -d '"' -f4)"; \
     echo "Building bootc ${BOOTC_TAG}"; \
     git clone --depth 1 --branch "${BOOTC_TAG}" https://github.com/containers/bootc /src/bootc

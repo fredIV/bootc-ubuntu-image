@@ -45,6 +45,14 @@ docker build -f Containerfile -t bootc-ubuntu-image:dev .
 docker run --rm bootc-ubuntu-image:dev bootc container lint
 ```
 
+If you hit a `403` from `api.github.com` during the build (its
+unauthenticated rate limit is easy to hit), pass a GitHub token as a build
+secret instead of retrying blind:
+
+```sh
+docker build -f Containerfile --secret id=gh_token,env=GH_TOKEN -t bootc-ubuntu-image:dev .
+```
+
 ## A note on scope
 
 This is a personal, from-scratch reference project exploring the bootc/
