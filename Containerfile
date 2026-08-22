@@ -87,10 +87,14 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
 #   a minimal Ubuntu image doesn't have it unless asked for explicitly.
 # - dosfstools: provides mkfs.fat, which bootc shells out to directly to
 #   format the EFI System Partition. Not installed by default either.
+# - cpio: dracut's own package postinst runs update-initramfs
+#   automatically on install, which needs cpio to build the archive.
+#   Previously masked by erofs-utils incidentally pulling cpio in as a
+#   dependency; surfaced once that package was removed.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ostree \
         linux-image-generic \
-        dracut \
+        dracut cpio \
         grub-efi-amd64-bin grub-common \
         selinux-basics selinux-policy-default policycoreutils \
         fdisk dosfstools \
