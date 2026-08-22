@@ -285,12 +285,26 @@ initialization here failed with no further detail to go on without
 digging into bootc's Rust source directly, which was more effort than
 this PoC's actual question warrants. Rather than keep guessing at an
 underdocumented failure in an admittedly experimental code path, the
-`prepare-root.conf` composefs opt-in was reverted (commented out, not
-deleted, so it's a one-line change to retry later) - falling back to
-bootc/ostree's default backend instead. This is worth being explicit
-about: it was our own choice, made in response to a soft lint
-*warning*, not a hard requirement, and undoing it isn't a compromise on
-the actual thing this repo is testing.
+`prepare-root.conf` composefs opt-in was reverted (`enabled = true` ->
+commented out) - falling back to what looked like bootc/ostree's default
+backend instead.
+
+**That went one step too far.** Removing the file's contents entirely
+surfaced a build-time regression unrelated to composefs (see the cpio
+finding below), and once that was fixed, `bootc install to-disk` failed
+with a new, blunter error: `Failed to find ostree/prepare-root.conf in
+/usr/lib or /etc`. Turns out the file's *existence* is required by
+`bootc install` regardless of backend - `bootc container lint`'s
+"warning" framing undersold that. The actual fix: keep the file, just
+declare composefs off explicitly (`enabled = false`) instead of deleting
+its contents. Net result is the same as intended - default ostree
+backend, no composefs - but by editing the config's value rather than
+removing the file whose presence bootc apparently requires outright.
+
+This whole detour is worth being explicit about: enabling composefs in
+the first place was our own choice, made in response to a soft lint
+*warning*, not a hard requirement, and turning it back off isn't a
+compromise on the actual thing this repo is testing.
 
 Worth being honest about: the earlier bootc-image-builder pivot reasoning
 was built on a wrong diagnosis. The pivot to `bootc install to-disk` was

@@ -151,12 +151,14 @@ RUN mkdir -p /sysroot && ln -s sysroot/ostree /ostree
 # install-time image-storage initialization failed here with an
 # underdocumented "Initializing images: No such file or directory" that
 # didn't resolve even after installing every filesystem tool it plausibly
-# needed (erofs-utils included). Reverted to bootc/ostree's default,
-# production backend instead of continuing to chase an undocumented
-# failure in an admittedly experimental code path - see
-# docs/ARCHITECTURE.md for the full writeup. Leaving this RUN commented
-# rather than deleted so re-enabling composefs later is a one-line change.
-# RUN mkdir -p /usr/lib/ostree && printf '[composefs]\nenabled = true\n' > /usr/lib/ostree/prepare-root.conf
+# needed (erofs-utils included). Removing the file entirely (rather than
+# just disabling composefs in it) turned out to be wrong too: bootc
+# install requires *a* prepare-root.conf to exist at all, regardless of
+# backend ("Failed to find ostree/prepare-root.conf in /usr/lib or /etc")
+# - lint's warning undersold how required this file actually is. So it's
+# back, just with composefs explicitly declared off instead of removed -
+# see docs/ARCHITECTURE.md for the full writeup.
+RUN mkdir -p /usr/lib/ostree && printf '[composefs]\nenabled = false\n' > /usr/lib/ostree/prepare-root.conf
 
 # Required label per bootc's own image contract: marks this as a valid
 # bootc base/target image rather than an arbitrary container image.
