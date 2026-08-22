@@ -91,10 +91,11 @@ RUN set -eux; \
     cp "/boot/vmlinuz-${kver}" "${moddir}/vmlinuz"; \
     cp "/boot/initrd.img-${kver}" "${moddir}/initramfs.img"
 
-# ostree requires an empty /sysroot to exist - it's where the real root
-# filesystem gets mounted at deploy time (found via `bootc container lint`,
-# which fails the build on this one with "Missing /sysroot").
-RUN mkdir -p /sysroot
+# ostree requires an empty /sysroot to exist (it's where the real root
+# filesystem gets mounted at deploy time) plus an /ostree symlink pointing
+# into it, mirroring the layout of an already-deployed ostree system.
+# Found both via `bootc container lint` failing the build on each in turn.
+RUN mkdir -p /sysroot && ln -s sysroot/ostree /ostree
 
 # Opts the image into ostree's composefs backend, which is what current
 # bootc/ostree expect by default (also flagged by `bootc container lint`).
