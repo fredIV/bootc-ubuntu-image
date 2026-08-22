@@ -101,6 +101,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # enforcement at runtime.
 RUN ln -sfn default /etc/selinux/targeted
 
+# bootc install (both `to-disk` and bootc-image-builder before it) has no
+# default root filesystem type for a distro it doesn't recognize, and
+# fails with "No root filesystem specified" without one. Fedora/RHEL
+# images get a default for free; Ubuntu doesn't, so declare it explicitly
+# via bootc's own image-level install config rather than requiring every
+# caller to pass a CLI flag - this is the same mechanism a real distro
+# would use.
+RUN mkdir -p /usr/lib/bootc/install && \
+    printf '[install.filesystem.root]\ntype = "ext4"\n' > /usr/lib/bootc/install/00-ubuntu.toml
+
 COPY --from=bootc-builder /src/bootc/target/release/bootc /usr/bin/bootc
 
 # --- ostree/bootc filesystem contract -----------------------------------

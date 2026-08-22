@@ -233,6 +233,18 @@ installing by inspecting its own container runtime environment, which
 only podman sets up. Fixed by running that one step via `podman run`
 instead.
 
+With that cleared, `bootc install to-disk` ran for real and failed with
+`No root filesystem specified` - the same underlying gap as
+bootc-image-builder's `DefaultRootFs` error earlier, but now hit in
+bootc's own native path rather than the (now-dropped) wrapper tool.
+Rather than pass a one-off CLI flag, this is fixed properly at the image
+level: bootc reads install defaults from
+`/usr/lib/bootc/install/*.toml` files baked into the image itself (the
+same mechanism a real distro's own bootc-enabled base image would use),
+so `00-ubuntu.toml` now declares `[install.filesystem.root] type = "ext4"`
+directly in the `Containerfile`. This makes the image self-sufficient for
+installs rather than depending on every caller remembering a flag.
+
 ## Note: `bootc-image-builder` itself is being deprecated upstream
 
 While chasing the issues above it came up that `osbuild/bootc-image-builder`
