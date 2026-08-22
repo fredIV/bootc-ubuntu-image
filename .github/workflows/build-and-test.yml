@@ -30,7 +30,10 @@ jobs:
         id: meta
         run: |
           set -euo pipefail
-          IMAGE="ghcr.io/${{ github.repository }}:${{ github.sha }}"
+          # Docker image refs must be lowercase; the GitHub owner/repo isn't
+          # guaranteed to be (this account is "fredIV").
+          REPO_LOWER="$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')"
+          IMAGE="ghcr.io/${REPO_LOWER}:${{ github.sha }}"
           docker build -f Containerfile -t "$IMAGE" -t local/bootc-ubuntu-image:test .
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
