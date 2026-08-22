@@ -69,7 +69,7 @@ jobs:
       - name: Install QEMU and podman
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf podman
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf podman skopeo
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -120,16 +120,32 @@ jobs:
       # composefs-native backend hard-requires fs-verity-capable storage
       # unless told otherwise; our loopback-partitioned ext4/fat32 target
       # isn't guaranteed to have it enabled.
+      # GHCR image pushed by `docker push` is Docker v2 schema-2, not OCI.
+      # bootc's composefs-native backend has an open, unresolved upstream
+      # bug (bootc-dev/bootc#1703) that hits exactly this combination:
+      # pulling a Docker-schema image from a registry causes it to look up
+      # a layer blob under the wrong digest and fail with
+      # "GetBlob: ... file does not exist" - found by searching bootc's own
+      # issue tracker for the exact error text after hitting it here,
+      # confirming it's a known bootc bug rather than anything specific to
+      # this image or Ubuntu. The issue's own title calls out the Docker
+      # v2s2 trigger, so this rewrites the already-pulled image's stored
+      # manifest to OCI format in place (no re-fetch needed - same blobs,
+      # same digests, just OCI-typed metadata) before bootc ever touches
+      # it, rather than accepting the bug as a hard wall untested.
       - name: Install the bootc image directly to a disk with `bootc install to-disk`
         run: |
           set -euo pipefail
           echo "${{ secrets.GITHUB_TOKEN }}" | sudo podman login ghcr.io -u "${{ github.actor }}" --password-stdin
+          IMAGE="${{ needs.build-and-lint.outputs.image }}"
+          sudo podman pull "$IMAGE"
+          sudo skopeo copy --format oci "containers-storage:$IMAGE" "containers-storage:${IMAGE}-oci"
           truncate -s 10G disk.raw
           LOOPDEV="$(sudo losetup --show -fP disk.raw)"
           echo "LOOPDEV=$LOOPDEV" >> "$GITHUB_ENV"
           sudo podman run --rm --privileged --pid=host \
             -v /dev:/dev \
-            "${{ needs.build-and-lint.outputs.image }}" \
+            "${IMAGE}-oci" \
             bootc install to-disk --wipe --composefs-backend --allow-missing-verity "$LOOPDEV"
 
       - name: Boot the installed disk in QEMU and check it comes up

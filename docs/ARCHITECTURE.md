@@ -509,12 +509,58 @@ already present transitively, but not the stub it needs to copy) - found
 by reading `install_systemd_boot`'s body directly rather than guessing
 from the CLI's own `--help` output.
 
-**Not yet confirmed via CI as of this writing** - this fix is well-founded
-from source but the pipeline hasn't been re-run against it yet. See the
-Actions history for whether it actually gets to a booted VM, and whether
-the composefs-native backend surfaces its own new requirements (kernel
-EROFS/composefs support, fs-verity-capable storage even with the flag
-above) once it runs for real.
+## Composefs-native backend hits an open upstream bug on registry-pulled images
+
+Re-running CI against `--composefs-backend` got further than ever -
+past imgstorage, past deploy, into disk partitioning and both
+filesystem formats (`mkfs.ext4 -O verity`, `mkfs.fat`) - then failed
+with:
+
+```
+error: Installing to disk: Getting container info: failed to invoke
+method GetBlob: locating item named
+"sha256:db8f07dcc0c2f4f7e65c7771ddfe87e45e5ffa083a98794e4ef9a648e75e10bf"
+for image with ID
+"d161385000e16278b0f79f514577de75bcd4c69508f8a16d67da4a75614d90d0"
+(consider removing the image to resolve the issue): file does not exist
+```
+
+The referenced blob digest doesn't match any of the 10 layer blobs the
+preceding `podman pull` actually copied (visible earlier in the same
+log) - the composefs-native backend is looking up a blob under a digest
+that was never fetched at all, not a corrupted/partial download.
+
+Searching bootc's own issue tracker for this exact error text (rather
+than guessing at another missing package) found
+[bootc-dev/bootc#1703](https://github.com/bootc-dev/bootc/issues/1703),
+"composefs fails with Docker v2s2 images" - open, unresolved, same error
+shape (`GetBlob` failing to find a layer digest under a given image
+config ID), explicitly reproduced by pulling a **Docker v2 schema-2**
+image from a registry rather than building it locally. That's exactly
+this pipeline's shape: `docker build` + `docker push` to GHCR produces a
+Docker-schema manifest by default, then a separate job on a separate
+runner does a fresh `podman pull` of it before installing. This isn't
+an Ubuntu-specific or Fedora-vs-Ubuntu finding at all - it would hit a
+Fedora-built bootc image the same way, on any two-machine build→pull
+workflow (which is the normal way images actually get deployed).
+
+Since the upstream issue's own title names the trigger condition
+precisely, tried a targeted fix rather than accepting it as a wall
+outright: reformat the already-pulled image's stored manifest to OCI
+(`skopeo copy --format oci containers-storage:$IMAGE
+containers-storage:${IMAGE}-oci`) before handing it to `bootc install
+to-disk`. Same blobs, same digests - just OCI-typed metadata instead of
+Docker's - so no extra network fetch, and it directly targets what
+#1703 says triggers the bug.
+
+**Not yet confirmed via CI as of this writing.** If it works, that's
+this PoC's install path reaching a real disk image. If it doesn't, it
+confirms #1703 as a genuine, upstream-acknowledged maturity gap in
+bootc's composefs-native backend - not a Fedora/Ubuntu compatibility
+question at all, since the classic ostree backend's Grub-only bootloader
+support is *also* not Ubuntu-specific once composefs is the only path to
+non-Grub bootloaders. Either outcome is worth recording plainly rather
+than treated as another package to add.
 
 **Net assessment:** the image-level compatibility question - can an
 Ubuntu base satisfy bootc's own contract - is answered *yes*, cleanly,
