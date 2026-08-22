@@ -66,10 +66,10 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
 
-      - name: Install QEMU
+      - name: Install QEMU and podman
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf podman
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -90,14 +90,22 @@ jobs:
       # too. So: test bootc's own native `install to-disk` instead - the
       # actual core functionality this whole project is about, with no
       # osbuild/Fedora-tooling layer in between at all.
+      #
+      # Must run via podman specifically, not plain docker: bootc's
+      # install command determines what image it's installing by
+      # inspecting its own container runtime (podman sets this up;
+      # docker doesn't), otherwise it errors with "Either
+      # --source-imgref must be defined or this command must be
+      # executed inside a podman container" - found by running it, not
+      # guessed.
       - name: Install the bootc image directly to a disk with `bootc install to-disk`
         run: |
           set -euo pipefail
-          docker pull "${{ needs.build-and-lint.outputs.image }}"
+          echo "${{ secrets.GITHUB_TOKEN }}" | sudo podman login ghcr.io -u "${{ github.actor }}" --password-stdin
           truncate -s 10G disk.raw
           LOOPDEV="$(sudo losetup --show -fP disk.raw)"
           echo "LOOPDEV=$LOOPDEV" >> "$GITHUB_ENV"
-          sudo docker run --rm --privileged --pid=host \
+          sudo podman run --rm --privileged --pid=host \
             -v /dev:/dev \
             "${{ needs.build-and-lint.outputs.image }}" \
             bootc install to-disk --wipe "$LOOPDEV"

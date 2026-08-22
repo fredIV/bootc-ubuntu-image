@@ -226,6 +226,13 @@ layer in between. This is also a more faithful test of the real question
 (does bootc/ostree's own logic work on Ubuntu) than routing through a tool
 built and tuned for Fedora's ecosystem.
 
+First attempt ran it via plain `docker run` and failed immediately with
+`Either --source-imgref must be defined or this command must be executed
+inside a podman container` - `bootc install` figures out which image it's
+installing by inspecting its own container runtime environment, which
+only podman sets up. Fixed by running that one step via `podman run`
+instead.
+
 ## Note: `bootc-image-builder` itself is being deprecated upstream
 
 While chasing the issues above it came up that `osbuild/bootc-image-builder`
