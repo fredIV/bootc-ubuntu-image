@@ -81,12 +81,17 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
 #   against grub2. Whether plain (non-BLS) Ubuntu grub is compatible
 #   enough is the biggest open question this PoC exists to answer -
 #   see docs/ARCHITECTURE.md.
+# - fdisk: provides /usr/sbin/sfdisk, which `bootc install to-disk`
+#   shells out to directly when partitioning. Recent Debian/Ubuntu split
+#   sfdisk out of the base util-linux package into this separate one, so
+#   a minimal Ubuntu image doesn't have it unless asked for explicitly.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ostree \
         linux-image-generic \
         dracut \
         grub-efi-amd64-bin grub-common \
         selinux-basics selinux-policy-default policycoreutils \
+        fdisk \
         ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/cache/debconf/*.dat* /var/log/* /tmp/* /run/*
 

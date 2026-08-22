@@ -204,17 +204,12 @@ with:
 FileNotFoundError: [Errno 2] No such file or directory: 'sfdisk'
 ```
 
-`sfdisk` is a basic `util-linux` tool; something not finding it deep
-inside a Fedora-based container's own disk-building pipeline (after
-several *other* stages using similar low-level tooling had already
-succeeded) doesn't read as anything about our image's content. The
-`docker run` invocation for `bootc-image-builder` also mounts
-`/var/run/docker.sock`, which strongly suggests it dispatches at least
-some stages to sibling containers via Docker rather than doing everything
-in-process - and if that dispatch is misconfigured or one of those sibling
-images is incomplete, that's a bug/gap in bootc-image-builder's own
-container orchestration, not something fixable from our Containerfile or
-`docker run` flags.
+At the time this looked like a gap in `bootc-image-builder`'s own
+container orchestration (it mounts `/var/run/docker.sock`, suggesting it
+dispatches some stages to sibling containers) rather than anything about
+our image. **That diagnosis turned out to be wrong** - see the correction
+below, where `bootc install to-disk` hits the exact same missing binary,
+which only makes sense if it was always our image missing a package.
 
 Rather than keep debugging a third-party wrapper's internal plumbing -
 especially one that's [being deprecated upstream](#note-bootc-image-builder-itself-is-being-deprecated-upstream)
@@ -244,6 +239,34 @@ same mechanism a real distro's own bootc-enabled base image would use),
 so `00-ubuntu.toml` now declares `[install.filesystem.root] type = "ext4"`
 directly in the `Containerfile`. This makes the image self-sufficient for
 installs rather than depending on every caller remembering a flag.
+
+## Correction: the `sfdisk` failure was ours all along
+
+With the root-filesystem config in place, `bootc install to-disk` ran
+further and failed with:
+
+```
+error: Installing to disk: Creating rootfs: Failed to run sfdisk: No such file or directory (os error 2)
+```
+
+The exact same missing binary as the `bootc-image-builder` failure earlier
+- except this time it's `bootc`'s own code shelling out directly, with no
+sibling-container dispatch involved at all. That retroactively disproves
+the earlier theory: it was never a `bootc-image-builder` orchestration
+bug, it was our image missing `sfdisk` the whole time. Recent Debian/
+Ubuntu split `sfdisk`/`fdisk`/`cfdisk` out of the base `util-linux`
+package into a separate `fdisk` package, so a minimal Ubuntu image
+doesn't have it unless installed explicitly - confirmed via
+packages.ubuntu.com, which lists `/usr/sbin/sfdisk` under `fdisk`, not
+`util-linux`. Fixed by adding `fdisk` to the `Containerfile`.
+
+Worth being honest about: the earlier bootc-image-builder pivot reasoning
+was built on a wrong diagnosis. The pivot to `bootc install to-disk` was
+still the right call independently (it's the more direct test of the
+actual question, and bootc-image-builder is being deprecated regardless),
+but the specific claim that bootc-image-builder had an internal
+sibling-container bug wasn't correct - it just needed the same missing
+package this repo needed anyway.
 
 ## Note: `bootc-image-builder` itself is being deprecated upstream
 
