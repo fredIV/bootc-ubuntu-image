@@ -87,17 +87,13 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
 #   a minimal Ubuntu image doesn't have it unless asked for explicitly.
 # - dosfstools: provides mkfs.fat, which bootc shells out to directly to
 #   format the EFI System Partition. Not installed by default either.
-# - erofs-utils: provides mkfs.erofs. This image opts into ostree's
-#   composefs backend (see prepare-root.conf below), which stores deployed
-#   images as EROFS - without this, bootc fails initializing its image
-#   storage ("imgstorage") on install.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ostree \
         linux-image-generic \
         dracut \
         grub-efi-amd64-bin grub-common \
         selinux-basics selinux-policy-default policycoreutils \
-        fdisk dosfstools erofs-utils \
+        fdisk dosfstools \
         ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/cache/debconf/*.dat* /var/log/* /tmp/* /run/*
 
@@ -145,9 +141,18 @@ RUN set -eux; \
 # Found both via `bootc container lint` failing the build on each in turn.
 RUN mkdir -p /sysroot && ln -s sysroot/ostree /ostree
 
-# Opts the image into ostree's composefs backend, which is what current
-# bootc/ostree expect by default (also flagged by `bootc container lint`).
-RUN mkdir -p /usr/lib/ostree && printf '[composefs]\nenabled = true\n' > /usr/lib/ostree/prepare-root.conf
+# `bootc container lint` suggests enabling ostree's composefs backend
+# (baseimage-composefs warning), and this image tried that - but composefs
+# is documented upstream as bootc's *experimental* backend, and its own
+# install-time image-storage initialization failed here with an
+# underdocumented "Initializing images: No such file or directory" that
+# didn't resolve even after installing every filesystem tool it plausibly
+# needed (erofs-utils included). Reverted to bootc/ostree's default,
+# production backend instead of continuing to chase an undocumented
+# failure in an admittedly experimental code path - see
+# docs/ARCHITECTURE.md for the full writeup. Leaving this RUN commented
+# rather than deleted so re-enabling composefs later is a one-line change.
+# RUN mkdir -p /usr/lib/ostree && printf '[composefs]\nenabled = true\n' > /usr/lib/ostree/prepare-root.conf
 
 # Required label per bootc's own image contract: marks this as a valid
 # bootc base/target image rather than an arbitrary container image.

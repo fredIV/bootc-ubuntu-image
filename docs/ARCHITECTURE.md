@@ -270,10 +270,27 @@ free as part of its base package set.
 
 Third occurrence, past both of those: `Creating imgstorage: Initializing
 images: No such file or directory`. "imgstorage" is bootc's composefs
-storage backend - which this image opted into via `prepare-root.conf`
-above - and it stores deployed container images as EROFS filesystem
-images. `mkfs.erofs` (package `erofs-utils`) wasn't installed, same
-pattern again. Fixed the same way.
+storage backend - which this image had opted into via `prepare-root.conf`
+(in response to a `bootc container lint` warning suggesting it) - and it
+stores deployed container images as EROFS filesystem images. The first
+theory was a missing `mkfs.erofs` (package `erofs-utils`), matching the
+pattern of every prior fix in this section.
+
+**That theory was wrong.** Installing `erofs-utils` and re-running
+produced the exact same error, byte for byte - meaning `mkfs.erofs` was
+never the blocker. Composefs is documented upstream as bootc's
+*experimental* storage backend (ostree's classic deployment mechanism is
+still the default, production one), and its own image-storage
+initialization here failed with no further detail to go on without
+digging into bootc's Rust source directly, which was more effort than
+this PoC's actual question warrants. Rather than keep guessing at an
+underdocumented failure in an admittedly experimental code path, the
+`prepare-root.conf` composefs opt-in was reverted (commented out, not
+deleted, so it's a one-line change to retry later) - falling back to
+bootc/ostree's default backend instead. This is worth being explicit
+about: it was our own choice, made in response to a soft lint
+*warning*, not a hard requirement, and undoing it isn't a compromise on
+the actual thing this repo is testing.
 
 Worth being honest about: the earlier bootc-image-builder pivot reasoning
 was built on a wrong diagnosis. The pivot to `bootc install to-disk` was
