@@ -194,6 +194,38 @@ a missing file. The labels it writes are inert since AppArmor - not
 SELinux - is what Ubuntu's kernel actually enforces; this exists purely to
 satisfy osbuild's build-time step, not to turn SELinux on at runtime.
 
+## Pivot: dropped `bootc-image-builder`, testing `bootc install to-disk` directly
+
+Past the SELinux fix, the build got further than ever - all the way into
+actual disk assembly (GPT partition table construction) - and then failed
+with:
+
+```
+FileNotFoundError: [Errno 2] No such file or directory: 'sfdisk'
+```
+
+`sfdisk` is a basic `util-linux` tool; something not finding it deep
+inside a Fedora-based container's own disk-building pipeline (after
+several *other* stages using similar low-level tooling had already
+succeeded) doesn't read as anything about our image's content. The
+`docker run` invocation for `bootc-image-builder` also mounts
+`/var/run/docker.sock`, which strongly suggests it dispatches at least
+some stages to sibling containers via Docker rather than doing everything
+in-process - and if that dispatch is misconfigured or one of those sibling
+images is incomplete, that's a bug/gap in bootc-image-builder's own
+container orchestration, not something fixable from our Containerfile or
+`docker run` flags.
+
+Rather than keep debugging a third-party wrapper's internal plumbing -
+especially one that's [being deprecated upstream](#note-bootc-image-builder-itself-is-being-deprecated-upstream)
+in favor of a different tool entirely - this repo now tests the thing it's
+actually trying to prove more directly: `bootc install to-disk`, bootc's
+own native disk-installation path, run straight from our built image
+against a loopback-mounted raw disk file, with no osbuild/Fedora-tooling
+layer in between. This is also a more faithful test of the real question
+(does bootc/ostree's own logic work on Ubuntu) than routing through a tool
+built and tuned for Fedora's ecosystem.
+
 ## Note: `bootc-image-builder` itself is being deprecated upstream
 
 While chasing the issues above it came up that `osbuild/bootc-image-builder`

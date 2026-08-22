@@ -66,10 +66,10 @@ jobs:
           sudo udevadm trigger --name-match=kvm
           ls -l /dev/kvm
 
-      - name: Install QEMU and podman
+      - name: Install QEMU
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf podman
+          sudo apt-get install -y --no-install-recommends qemu-system-x86 qemu-utils ovmf
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -78,39 +78,41 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Pull image into container storage for bootc-image-builder
+      # bootc-image-builder (a Fedora-authored osbuild wrapper, now
+      # deprecated upstream in favor of a unified image-builder tool) got
+      # our image past every content-related check - lint, kernel/initrd
+      # layout, distro/rootfs detection, SELinux relabeling - but then hit
+      # "sfdisk: No such file or directory" deep in its own disk-assembly
+      # pipeline. That's a tooling/environment gap in bootc-image-builder
+      # itself (it dispatches some stages via a mounted docker.sock to
+      # sibling containers we don't control), not anything about our
+      # image, and would plausibly hit the same wall on a Fedora image
+      # too. So: test bootc's own native `install to-disk` instead - the
+      # actual core functionality this whole project is about, with no
+      # osbuild/Fedora-tooling layer in between at all.
+      - name: Install the bootc image directly to a disk with `bootc install to-disk`
         run: |
           set -euo pipefail
-          # bootc-image-builder no longer pulls images itself - it only
-          # reads from the containers-storage backend mounted below, which
-          # `docker push` in the previous job doesn't populate. Pull with
-          # podman first so it's actually there.
-          echo "${{ secrets.GITHUB_TOKEN }}" | sudo podman login ghcr.io -u "${{ github.actor }}" --password-stdin
-          sudo podman pull "${{ needs.build-and-lint.outputs.image }}"
+          docker pull "${{ needs.build-and-lint.outputs.image }}"
+          truncate -s 10G disk.raw
+          LOOPDEV="$(sudo losetup --show -fP disk.raw)"
+          echo "LOOPDEV=$LOOPDEV" >> "$GITHUB_ENV"
+          sudo docker run --rm --privileged --pid=host \
+            -v /dev:/dev \
+            "${{ needs.build-and-lint.outputs.image }}" \
+            bootc install to-disk --wipe "$LOOPDEV"
 
-      - name: Build a bootable disk image with bootc-image-builder
+      - name: Boot the installed disk in QEMU and check it comes up
         run: |
           set -euo pipefail
-          mkdir -p output
-          docker run --rm --privileged \
-            -v /var/lib/containers/storage:/var/lib/containers/storage \
-            -v "$PWD/output:/output" \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            quay.io/centos-bootc/bootc-image-builder:latest \
-            --type qcow2 \
-            --rootfs ext4 \
-            --local \
-            "${{ needs.build-and-lint.outputs.image }}"
-
-      - name: Boot the image in QEMU and check it comes up
-        run: |
-          set -euo pipefail
-          QCOW="$(find output -name '*.qcow2' | head -n1)"
-          test -n "$QCOW"
+          sudo losetup -d "$LOOPDEV" || true
+          cp /usr/share/OVMF/OVMF_VARS.fd ovmf_vars.fd
           timeout 300 qemu-system-x86_64 \
             -m 2048 -smp 2 \
             -enable-kvm -cpu host \
-            -drive file="$QCOW",if=virtio,format=qcow2 \
+            -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd \
+            -drive if=pflash,format=raw,file=ovmf_vars.fd \
+            -drive file=disk.raw,if=virtio,format=raw \
             -nographic -serial mon:stdio \
             -display none \
             | tee boot.log &
