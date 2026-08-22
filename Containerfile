@@ -101,11 +101,16 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
 #   ("No such file or directory") that gives no hint it's podman/skopeo
 #   that's missing - found by reading bootc's Rust source directly after
 #   the error persisted across every composefs-related theory.
+# - systemd-boot-efi: `bootctl install` (see below) copies its EFI stub
+#   binaries from /usr/lib/systemd/boot/efi/ into the ESP. That directory
+#   only exists if this package is installed; systemd itself (already
+#   pulled in transitively) ships the bootctl binary but not the stub.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ostree \
         linux-image-generic \
         dracut cpio \
         grub-efi-amd64-bin grub-common \
+        systemd-boot-efi \
         selinux-basics selinux-policy-default policycoreutils \
         fdisk dosfstools \
         podman skopeo \

@@ -98,6 +98,28 @@ jobs:
       # --source-imgref must be defined or this command must be
       # executed inside a podman container" - found by running it, not
       # guessed.
+      #
+      # --composefs-backend: bootc auto-detects our image's bootloader as
+      # `Bootloader::Systemd` (Ubuntu ships systemd-boot, not a BLS-patched
+      # grub2). bootc's classic ostree-backend install path
+      # (crates/lib/src/install.rs) only has a real bootloader-install
+      # implementation for Grub (`install_via_bootupd`); the
+      # Bootloader::Systemd arm is an unconditional
+      # `bail!("bootupd is required for ostree-based installs")` with no
+      # actual bootupd attempt behind it. The working systemd-boot
+      # installer (`install_systemd_boot`, using `bootctl install`
+      # directly - no bootupd at all) exists in the same bootloader.rs but
+      # is only ever called from bootc's separate composefs-native install
+      # backend (crates/lib/src/bootc_composefs/boot.rs), which replaces
+      # the ostree-classic sysroot/deployment model entirely and is gated
+      # behind this flag. (This is unrelated to the prepare-root.conf
+      # `[composefs] enabled` setting in the image, which only toggles the
+      # *classic* ostree backend's own internal object storage and doesn't
+      # affect which install backend runs at all - confirmed by reading
+      # both code paths, not guessed.) --allow-missing-verity: the
+      # composefs-native backend hard-requires fs-verity-capable storage
+      # unless told otherwise; our loopback-partitioned ext4/fat32 target
+      # isn't guaranteed to have it enabled.
       - name: Install the bootc image directly to a disk with `bootc install to-disk`
         run: |
           set -euo pipefail
@@ -108,7 +130,7 @@ jobs:
           sudo podman run --rm --privileged --pid=host \
             -v /dev:/dev \
             "${{ needs.build-and-lint.outputs.image }}" \
-            bootc install to-disk --wipe "$LOOPDEV"
+            bootc install to-disk --wipe --composefs-backend --allow-missing-verity "$LOOPDEV"
 
       - name: Boot the installed disk in QEMU and check it comes up
         run: |

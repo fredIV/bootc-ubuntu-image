@@ -398,28 +398,137 @@ stabilizes, but not blocking this PoC's goal.
   and the EFI System Partition (`mkfs.fat`), all using ordinary Ubuntu
   packages (`fdisk`, `dosfstools`) that the Fedora ecosystem doesn't need
   to think about but Ubuntu does.
-- The one blocker that survived every config/package theory
+- The blocker that survived every config/package theory
   (`Creating imgstorage: Initializing images: No such file or directory`,
-  unaffected by the composefs setting either way) has a confirmed root
+  unaffected by the composefs setting either way) had a confirmed root
   cause straight from bootc's Rust source: it execs `podman images`
   inside the image being installed to set up its own container storage,
   and this image never had `podman` installed in it (only the CI host
   did, to run `podman run <image> bootc install to-disk` in the first
   place). `skopeo` is used the same way elsewhere in the deploy path.
-  Both are now installed - see the writeup above for the exact source
-  reference. **Not yet re-run in CI as of this writing** - see the
-  Actions history for whether this actually gets the pipeline to a
-  booted VM.
+  **Confirmed fixed via CI** once both were installed: imgstorage
+  initialized and the full container image (10 layers) deployed
+  successfully - the furthest the install path has gotten.
+
+## Bootloader install: Ubuntu's systemd-boot has no path in bootc's classic backend
+
+Once imgstorage/deploy started working, `bootc install to-disk` got
+further and hit a new, later failure:
+
+```
+Bootloader: systemd
+...
+error: Installing to disk: bootupd is required for ostree-based installs
+```
+
+bootc auto-detects the target's bootloader from the image contents
+(`crates/lib/src/install.rs`, `supports_bootupd`/`detected_bootloader`
+logic). It picked `Bootloader::Systemd` for this image - not `Grub` -
+because Ubuntu's `systemd` packaging ships systemd-boot's EFI stub, and
+this image never installed a BLS-patched grub2 the way Fedora does.
+
+Reading `crates/lib/src/install.rs` directly (around the point it bails)
+shows the actual match statement:
+
+```rust
+match postfetch.detected_bootloader {
+    Bootloader::Grub => {
+        crate::bootloader::install_via_bootupd(
+            ...
+        )?;
+    }
+    Bootloader::Systemd | Bootloader::GrubCC => {
+        anyhow::bail!("bootupd is required for ostree-based installs");
+    }
+    ...
+}
+```
+
+Only `Bootloader::Grub` has a real implementation behind it
+(`install_via_bootupd`, which shells out to Fedora/CoreOS's `bootupd`/
+`bootupctl` tooling - not packaged for Ubuntu at all). The
+`Bootloader::Systemd` arm isn't "try bootupd and fail" - it's a hardcoded
+bail with no attempt made. This looked, at first, like the architectural
+wall this whole project exists to test for: no BLS-grub, no bootupd, no
+systemd-boot support in the classic ostree install path.
+
+But `crates/lib/src/bootloader.rs` (read in full) has a second,
+completely implemented function sitting right next to
+`install_via_bootupd`: **`install_systemd_boot`**, which installs
+systemd-boot with plain `bootctl install --root ... --esp-path ...` -
+no bootupd, no Fedora tooling, nothing Ubuntu couldn't run. The question
+became: why does the classic install path never call it?
+
+Grepping the whole `bootc` source tree for where `install_systemd_boot`
+is actually called answers that: it's only invoked from
+`crates/lib/src/bootc_composefs/boot.rs`, inside the non-Grub branch of a
+bootloader-install `match` that's structurally identical to the one in
+`install.rs` above - same three-way split (Grub/GrubCC via bootupd,
+s390x via zipl, everything else via `install_systemd_boot`) - but this
+one actually has a working arm for `Bootloader::Systemd` instead of a
+bail.
+
+`bootc_composefs/boot.rs` belongs to a second, entirely separate install
+backend: bootc's composefs-native backend (`crates/lib/src/install.rs`,
+the `if state.composefs_options.composefs_backend { ... }` branch around
+line 2024). It bypasses ostree's classic sysroot/deployment model
+altogether - a different repository format, a different deploy
+mechanism, gated behind the `--composefs-backend` CLI flag
+(`InstallComposefsOpts::composefs_backend` in `install.rs`). Whichever
+backend is selected decides which entire bootloader `match` statement
+runs; the classic backend's arm for `Bootloader::Systemd` was simply
+never implemented, because Fedora/RHEL images always resolve to `Grub`.
+
+One thing worth being explicit about, since this project already spent a
+whole detour on composefs once: **this is a different composefs switch
+than the one this repo already has an opinion on.** The
+`/usr/lib/ostree/prepare-root.conf` `[composefs] enabled` setting (still
+`false` in this image) controls whether the *classic* ostree backend uses
+composefs as its own internal object-storage format - unrelated to which
+install backend runs at all, and already confirmed (by testing both
+values in CI) to have no effect on any of the errors seen so far. The
+`--composefs-backend` CLI flag is a completely different, higher-level
+switch: it picks the composefs-native backend over the classic one
+entirely, before any of that config file is even consulted. Confirmed by
+reading both code paths, not guessed.
+
+Given that, the fix committed here is to install using
+`bootc install to-disk --composefs-backend --allow-missing-verity`. That
+flag is what actually reaches the working `install_systemd_boot` code -
+not a workaround, but bootc's own documented (if experimental) answer for
+exactly this situation: a target where the classic path's bootloader
+support doesn't apply. `--allow-missing-verity` is needed alongside it
+because the composefs-native backend hard-requires fs-verity-capable
+storage unless told otherwise, and there's no guarantee our loopback disk
+image's filesystems have that enabled.
+
+This also meant installing one more package: `bootctl install` copies its
+EFI stub binaries from `/usr/lib/systemd/boot/efi/`, which only exists
+with `systemd-boot-efi` installed (`bootctl` itself comes from `systemd`,
+already present transitively, but not the stub it needs to copy) - found
+by reading `install_systemd_boot`'s body directly rather than guessing
+from the CLI's own `--help` output.
+
+**Not yet confirmed via CI as of this writing** - this fix is well-founded
+from source but the pipeline hasn't been re-run against it yet. See the
+Actions history for whether it actually gets to a booted VM, and whether
+the composefs-native backend surfaces its own new requirements (kernel
+EROFS/composefs support, fs-verity-capable storage even with the flag
+above) once it runs for real.
 
 **Net assessment:** the image-level compatibility question - can an
 Ubuntu base satisfy bootc's own contract - is answered *yes*, cleanly,
-and reproducibly. Every blocker hit in the install/deploy path so far has
-turned out to be the same kind of thing: a tool bootc shells out to that
-Fedora-family images carry by default and Ubuntu doesn't (`sfdisk`,
-`mkfs.fat`, now `podman`/`skopeo`) - not an architectural incompatibility.
-Whether that pattern holds all the way to a successful boot, or something
-genuinely architectural (the BLS/grub question this whole project set out
-to test) turns up next, is still open.
+and reproducibly. The install/deploy path has turned out to be a mix of
+both kinds of gap this project set out to distinguish: mostly missing
+packages a Fedora-family image carries for free (`sfdisk`, `mkfs.fat`,
+`podman`/`skopeo`, now `systemd-boot-efi`) - but the bootloader-install
+finding above is the first one that's genuinely architectural rather than
+a missing binary: bootc's classic ostree backend was written assuming
+every target resolves to a BLS-patched grub, and Ubuntu's systemd-boot
+default doesn't fit that assumption at all. Whether bootc's own
+composefs-native backend is a real answer to that, or just trades one
+unfinished path for a different unfinished one, is what the next CI run
+tests.
 
 Read the Actions run history for current pass/fail state rather than
 assuming this document is up to date with it.
