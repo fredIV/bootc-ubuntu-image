@@ -260,6 +260,14 @@ doesn't have it unless installed explicitly - confirmed via
 packages.ubuntu.com, which lists `/usr/sbin/sfdisk` under `fdisk`, not
 `util-linux`. Fixed by adding `fdisk` to the `Containerfile`.
 
+Same pattern repeated one step later: with partitioning working, `bootc`
+formatted the root partition (`mkfs.ext4`) fine, then failed formatting
+the EFI System Partition with `mkfs.fat` - also not installed by default,
+also shelled out to directly, also a separate package (`dosfstools`) on
+Debian/Ubuntu. Same fix, same reason: a minimal Ubuntu image doesn't carry
+partitioning/formatting tools that a Fedora-family bootc image gets for
+free as part of its base package set.
+
 Worth being honest about: the earlier bootc-image-builder pivot reasoning
 was built on a wrong diagnosis. The pivot to `bootc install to-disk` was
 still the right call independently (it's the more direct test of the

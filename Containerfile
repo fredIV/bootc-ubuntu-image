@@ -85,13 +85,15 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
 #   shells out to directly when partitioning. Recent Debian/Ubuntu split
 #   sfdisk out of the base util-linux package into this separate one, so
 #   a minimal Ubuntu image doesn't have it unless asked for explicitly.
+# - dosfstools: provides mkfs.fat, which bootc shells out to directly to
+#   format the EFI System Partition. Not installed by default either.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ostree \
         linux-image-generic \
         dracut \
         grub-efi-amd64-bin grub-common \
         selinux-basics selinux-policy-default policycoreutils \
-        fdisk \
+        fdisk dosfstools \
         ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/cache/debconf/*.dat* /var/log/* /tmp/* /run/*
 
