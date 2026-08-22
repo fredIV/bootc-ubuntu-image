@@ -68,8 +68,15 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
 
 # - ostree: packaged in Ubuntu universe, does the actual filesystem
 #   versioning bootc relies on.
-# - linux-image-generic / initramfs-tools: kernel + initrd bootc will
-#   relocate into ostree's expected layout below.
+# - linux-image-generic: kernel bootc will relocate into ostree's expected
+#   layout below.
+# - dracut (not Ubuntu's default initramfs-tools): bootc-image-builder
+#   shells into the target image and runs dracut's `lsinitrd` to inspect
+#   the initramfs when generating a disk image. initramfs-tools doesn't
+#   ship that tool at all, so bootc-image-builder can't introspect an
+#   Ubuntu-standard initrd - found by actually running it, not guessed.
+#   Using dracut to build the initrd too (below) rather than just
+#   installing it for the binary, so what lsinitrd inspects is real.
 # - grub-efi-amd64-bin: bootc's install/deploy path is written primarily
 #   against grub2. Whether plain (non-BLS) Ubuntu grub is compatible
 #   enough is the biggest open question this PoC exists to answer -
@@ -77,7 +84,7 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ostree \
         linux-image-generic \
-        initramfs-tools \
+        dracut \
         grub-efi-amd64-bin grub-common \
         ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/cache/debconf/*.dat* /var/log/* /tmp/* /run/*
@@ -87,15 +94,17 @@ COPY --from=bootc-builder /src/bootc/target/release/bootc /usr/bin/bootc
 # --- ostree/bootc filesystem contract -----------------------------------
 # ostree expects the kernel + initramfs for a deployment to live under
 # /usr/lib/modules/<kver>/{vmlinuz,initramfs.img}. Ubuntu's kernel
-# packaging puts them in /boot/vmlinuz-<kver> and /boot/initrd.img-<kver>
-# instead, so we copy them into the layout ostree looks for.
+# packaging puts the kernel at /boot/vmlinuz-<kver>, so that's copied
+# into place; the initramfs is generated fresh with dracut rather than
+# copied from initramfs-tools' /boot/initrd.img-<kver> (see above).
+# --no-hostonly matters: this build container's "hardware" isn't the
+# target machine's, so a hostonly initrd would be missing drivers.
 RUN set -eux; \
     kver="$(ls /usr/lib/modules | sort -V | tail -n1)"; \
     moddir="/usr/lib/modules/${kver}"; \
     test -f "/boot/vmlinuz-${kver}"; \
-    test -f "/boot/initrd.img-${kver}"; \
     cp "/boot/vmlinuz-${kver}" "${moddir}/vmlinuz"; \
-    cp "/boot/initrd.img-${kver}" "${moddir}/initramfs.img"
+    dracut --no-hostonly --force "${moddir}/initramfs.img" "${kver}"
 
 # ostree requires an empty /sysroot to exist (it's where the real root
 # filesystem gets mounted at deploy time) plus an /ostree symlink pointing

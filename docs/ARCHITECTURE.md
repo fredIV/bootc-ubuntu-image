@@ -122,6 +122,32 @@ None of the remaining warnings fail the build (only `baseimage-root` did),
 so they're tracked here rather than blocking progress on the actual
 question this repo is testing: whether the image deploys and boots.
 
+## `bootc-image-builder` finding: it assumes dracut
+
+Once the image passed `bootc container lint`, the next real test was
+converting it to a disk image with
+[`bootc-image-builder`](https://github.com/osbuild/bootc-image-builder) -
+itself a Fedora/CentOS-authored tool. It failed with:
+
+```
+error: cannot build manifest: failed to run lsinitrd --mod --kver 6.17.0-41-generic: exit status 127
+Error: crun: executable file `lsinitrd` not found in $PATH
+```
+
+`bootc-image-builder` shells into the *target* image and runs `lsinitrd`
+(part of Fedora's `dracut` package) to introspect the initramfs while
+generating the disk manifest. Ubuntu's default initramfs tooling is
+`initramfs-tools`, which doesn't ship `lsinitrd` - or produce an initrd in
+a format that tool expects - at all. This is a second, independent Fedora
+assumption baked into the tooling around bootc, not just bootc itself.
+
+Fix: install `dracut` (packaged in Ubuntu's `questing` release, confirmed
+via packages.ubuntu.com) and use it to generate the initramfs instead of
+`initramfs-tools`, so what `lsinitrd` inspects is an actual dracut-built
+initrd rather than just having the binary present with nothing valid to
+read. Built with `--no-hostonly`, since the build container's hardware
+isn't the target machine's.
+
 ## Status
 
 Early-stage PoC. Read the Actions run history for current pass/fail state
