@@ -74,7 +74,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         initramfs-tools \
         grub-efi-amd64-bin grub-common \
         ca-certificates curl \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/cache/debconf/*.dat* /var/log/* /tmp/* /run/*
 
 COPY --from=bootc-builder /src/bootc/target/release/bootc /usr/bin/bootc
 
@@ -90,6 +90,15 @@ RUN set -eux; \
     test -f "/boot/initrd.img-${kver}"; \
     cp "/boot/vmlinuz-${kver}" "${moddir}/vmlinuz"; \
     cp "/boot/initrd.img-${kver}" "${moddir}/initramfs.img"
+
+# ostree requires an empty /sysroot to exist - it's where the real root
+# filesystem gets mounted at deploy time (found via `bootc container lint`,
+# which fails the build on this one with "Missing /sysroot").
+RUN mkdir -p /sysroot
+
+# Opts the image into ostree's composefs backend, which is what current
+# bootc/ostree expect by default (also flagged by `bootc container lint`).
+RUN mkdir -p /usr/lib/ostree && printf '[composefs]\nenabled = true\n' > /usr/lib/ostree/prepare-root.conf
 
 # Required label per bootc's own image contract: marks this as a valid
 # bootc base/target image rather than an arbitrary container image.

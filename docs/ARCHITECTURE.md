@@ -86,6 +86,42 @@ for real. Treat the Actions history on this repo as the source of truth for
    the atomic swap and `bootc rollback` both work - the actual point of this
    whole exercise.
 
+## `bootc container lint` findings so far
+
+Once the image actually built (after the Ubuntu 25.10 rebase above),
+`bootc container lint` ran for real and gave concrete, non-hypothetical
+findings:
+
+- **Hard failure, fixed:** `baseimage-root: Missing /sysroot` - ostree
+  requires this directory to exist (it's where the real root gets mounted
+  at deploy time). Fixed with a plain `mkdir -p /sysroot`.
+- **Warning, fixed:** `baseimage-composefs` - added
+  `/usr/lib/ostree/prepare-root.conf` to opt into composefs, which current
+  bootc/ostree expect by default.
+- **Warning, fixed:** `nonempty-run-tmp` / `var-log` - build-time cruft in
+  `/run`, `/tmp`, apt/debconf caches and logs. Cleaned up in the same layer
+  that installs the packages that created it.
+- **Warning, not yet addressed:** `sysusers` - Ubuntu's default `ubuntu`
+  user (and `dhcpcd`) exist as plain `/etc/passwd` entries rather than
+  systemd `sysusers.d` declarations. ostree-based systems expect users to
+  be declared this way so `/etc` can be layered/reset correctly across
+  deployments. Real fix is either dropping the default `ubuntu` user from
+  the base image (it doesn't belong in a generic OS image anyway) or adding
+  proper `sysusers.d` entries - not done yet.
+- **Warning, not yet addressed:** `var-tmpfiles` / `nonempty-boot` - a
+  stock Debian/Ubuntu rootfs keeps a lot of persistent state directly under
+  `/var` and leftover kernel build artifacts under `/boot`
+  (`System.map-*`, `config-*`) that ostree instead expects to be either
+  empty, declared via systemd `tmpfiles.d`, or simply not present. Fedora's
+  bootc images get this "for free" from years of upstream packaging work
+  tuned for ostree; matching it on Ubuntu means auditing what's actually in
+  `/var` post-install and either trimming it or writing `tmpfiles.d`
+  entries for it. Non-trivial, left as follow-up rather than solved here.
+
+None of the remaining warnings fail the build (only `baseimage-root` did),
+so they're tracked here rather than blocking progress on the actual
+question this repo is testing: whether the image deploys and boots.
+
 ## Status
 
 Early-stage PoC. Read the Actions run history for current pass/fail state
