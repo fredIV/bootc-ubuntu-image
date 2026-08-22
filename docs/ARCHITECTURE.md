@@ -166,6 +166,45 @@ images it doesn't recognize (confirmed via its own GitHub issues, e.g.
 '--rootfs' to set manually"). Fixed by passing `--rootfs ext4` explicitly
 in the workflow.
 
+## `bootc-image-builder` finding: it assumes SELinux, unconditionally
+
+Past both fixes above, the build reached actual disk-image assembly and
+failed differently:
+
+```
+subprocess.CalledProcessError: Command '['setfiles', '-F', '-r', '/run/osbuild/tree', ...,
+  '/run/osbuild/tree/etc/selinux/targeted/contexts/files/file_contexts', '/run/osbuild/tree/']'
+  returned non-zero exit status 255.
+```
+
+The underlying `osbuild` pipeline that `bootc-image-builder` drives
+includes an unconditional SELinux-relabeling stage for any ostree/bootc
+target - reasonable for Fedora/RHEL, which always run SELinux, but Ubuntu
+defaults to AppArmor and ships no SELinux policy at all. The stage reads
+`/etc/selinux/targeted/contexts/files/file_contexts` from the *target*
+tree; with nothing there, `setfiles` fails outright.
+
+Fixed by installing Ubuntu's own SELinux policy (`selinux-basics`,
+`selinux-policy-default`, `policycoreutils` - all packaged, confirmed via
+packages.ubuntu.com) and aliasing it to the path osbuild expects
+(`ln -sfn default /etc/selinux/targeted`), since Debian/Ubuntu's policy
+package uses the type name `default` rather than Fedora's `targeted`.
+This makes `setfiles` see a real, internally-consistent policy rather than
+a missing file. The labels it writes are inert since AppArmor - not
+SELinux - is what Ubuntu's kernel actually enforces; this exists purely to
+satisfy osbuild's build-time step, not to turn SELinux on at runtime.
+
+## Note: `bootc-image-builder` itself is being deprecated upstream
+
+While chasing the issues above it came up that `osbuild/bootc-image-builder`
+was archived (June 2026) - its functionality is merging into a unified
+`image-builder` CLI/container (`--bootc-ref` and related flags). This repo
+still uses `bootc-image-builder` because it's what's currently published
+and working end-to-end; the SELinux/rootfs/dracut findings above are about
+`osbuild`'s manifest generation, which the unified tool inherits too, so
+switching wouldn't avoid them. Worth revisiting once the unified tool
+stabilizes, but not blocking this PoC's goal.
+
 ## Status
 
 Early-stage PoC. Read the Actions run history for current pass/fail state

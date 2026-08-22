@@ -86,8 +86,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         linux-image-generic \
         dracut \
         grub-efi-amd64-bin grub-common \
+        selinux-basics selinux-policy-default policycoreutils \
         ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/cache/debconf/*.dat* /var/log/* /tmp/* /run/*
+
+# bootc-image-builder's osbuild pipeline unconditionally relabels the
+# tree with SELinux contexts (Fedora/RHEL always have SELinux; Ubuntu
+# defaults to AppArmor and has none). It looks for the policy at the
+# hardcoded path /etc/selinux/targeted/..., but Debian/Ubuntu's policy
+# package installs itself under the type name "default" instead - alias
+# it so osbuild finds a real, self-consistent file_contexts to read.
+# The resulting xattr labels are inert under AppArmor; this exists only
+# to satisfy osbuild's build-time relabeling step, not to enable SELinux
+# enforcement at runtime.
+RUN ln -sfn default /etc/selinux/targeted
 
 COPY --from=bootc-builder /src/bootc/target/release/bootc /usr/bin/bootc
 
