@@ -91,6 +91,16 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
 #   automatically on install, which needs cpio to build the archive.
 #   Previously masked by erofs-utils incidentally pulling cpio in as a
 #   dependency; surfaced once that package was removed.
+# - podman, skopeo: `bootc install to-disk` runs as a container of THIS
+#   image, and once disk formatting is done it execs `podman images`
+#   (crates/lib/src/podstorage.rs, `imgstorage::create`) to initialize its
+#   own containers-storage root on the target disk, and uses skopeo
+#   (crates/lib/src/deploy.rs) to pull/copy the container image during
+#   deployment. Neither is installed by default; without them bootc's
+#   own binary can't find them to exec, failing with a bare ENOENT
+#   ("No such file or directory") that gives no hint it's podman/skopeo
+#   that's missing - found by reading bootc's Rust source directly after
+#   the error persisted across every composefs-related theory.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ostree \
         linux-image-generic \
@@ -98,6 +108,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         grub-efi-amd64-bin grub-common \
         selinux-basics selinux-policy-default policycoreutils \
         fdisk dosfstools \
+        podman skopeo \
         ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/cache/debconf/*.dat* /var/log/* /tmp/* /run/*
 

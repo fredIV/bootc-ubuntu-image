@@ -306,22 +306,58 @@ the first place was our own choice, made in response to a soft lint
 *warning*, not a hard requirement, and turning it back off isn't a
 compromise on the actual thing this repo is testing.
 
-**Final data point, and the one that actually matters:** with
-`prepare-root.conf` present and composefs explicitly set to
-`enabled = false`, `bootc install to-disk` failed with the *exact same*
-`Creating imgstorage: Initializing images: No such file or directory` -
-byte for byte identical to the composefs-enabled failure. That rules out
-composefs as the cause entirely, in either direction: this "imgstorage"
-initialization step runs unconditionally in `bootc install to-disk`,
-regardless of which storage backend is configured, and fails the same way
-either way. Whatever it needs, it isn't composefs-specific, and it isn't
-something exposed by `bootc container lint`, `bootc --help`, or the
-public GitHub issues/docs searched over the course of this investigation.
-Diagnosing it further would mean reading bootc's Rust source directly
-(the `imgstorage`/`bootc_composefs` or equivalent module in
-`bootc-dev/bootc`) rather than treating it as a config or package problem
-- a reasonable next step, just a different kind of task than everything
-above it in this document.
+**The data point that finally cracked it:** with `prepare-root.conf`
+present and composefs explicitly set to `enabled = false`, `bootc install
+to-disk` failed with the *exact same* `Creating imgstorage: Initializing
+images: No such file or directory` - byte for byte identical to the
+composefs-enabled failure. That ruled out composefs as the cause entirely,
+in either direction, and meant the answer wasn't in any config file,
+`bootc container lint` output, `bootc --help`, or the public GitHub
+issues/docs searched over the course of this investigation.
+
+So: bootc's own Rust source
+(`crates/lib/src/podstorage.rs` in `bootc-dev/bootc`). The function
+`imgstorage::create()` is annotated `#[context("Creating imgstorage")]`,
+and inside it:
+
+```rust
+new_podman_cmd_in(&sysroot, &storage_root, &run)?
+    .stdout(Stdio::null())
+    .arg("images")
+    .run_capture_stderr()
+    .context("Initializing images")?;
+```
+
+"imgstorage" has nothing to do with composefs at all - it's bootc setting
+up a `containers-storage:`-format root on the target disk (podman's own
+storage format) to hold deployed container images, and it initializes
+that root by literally **executing `podman images`** inside it.
+`new_podman_cmd_in` builds that command via `Command::new(bootc_utils::podman_bin())`,
+and `podman_bin()` (in `crates/utils/src/lib.rs`) just returns the literal
+string `"podman"` - a plain `$PATH` lookup, overridable only via an
+undocumented `BOOTC_EXP_EXTERNAL_CONTAINER_TOOL` env var.
+
+`bootc install to-disk` runs *as a container of the image being
+installed* (that's why it has to run under `podman run <image> bootc
+install to-disk` rather than as a standalone binary) - so when it execs
+`podman` mid-install, it's looking for `podman` inside **that same
+image's own filesystem**, not on the CI host. This image never had
+`podman` installed in it: `podman` was only ever installed on the CI
+*runner*, to be able to run `podman run <image> bootc install to-disk`
+in the first place. The container being installed had no `podman` binary
+of its own to exec, hence a bare ENOENT with no indication of what was
+missing. `crates/lib/src/deploy.rs` shows `skopeo` used the same way
+elsewhere in the deploy path, so both are now installed in the image
+(`podman skopeo`, both packaged in Ubuntu 25.10 - confirmed via
+packages.ubuntu.com before adding).
+
+This is, in the end, the exact same category of finding as every other
+fix in this document - a tool bootc shells out to that a Fedora-family
+bootc image has "for free" (Fedora's own container tooling ships podman/
+skopeo as part of its base expectations) and Ubuntu doesn't. It just took
+reading the actual source to find, because unlike `sfdisk`/`mkfs.fat`/
+`mkfs.erofs`, the missing binary's name never appeared anywhere in the
+error output.
 
 Worth being honest about: the earlier bootc-image-builder pivot reasoning
 was built on a wrong diagnosis. The pivot to `bootc install to-disk` was
@@ -362,30 +398,28 @@ stabilizes, but not blocking this PoC's goal.
   and the EFI System Partition (`mkfs.fat`), all using ordinary Ubuntu
   packages (`fdisk`, `dosfstools`) that the Fedora ecosystem doesn't need
   to think about but Ubuntu does.
-
-**Not yet resolved:**
-
-- `bootc install to-disk` fails immediately after disk formatting, at an
-  "imgstorage" initialization step, with `Creating imgstorage:
-  Initializing images: No such file or directory`. This happens
-  identically regardless of the composefs backend setting (tried both
-  enabled and explicitly disabled - see the writeup above), and nothing
-  in bootc's lint output, `--help`, or public documentation/issues found
-  during this investigation explains what file or directory it's looking
-  for. This blocks the actual boot test - the pipeline has not yet
-  produced a booted Ubuntu-as-bootc VM.
+- The one blocker that survived every config/package theory
+  (`Creating imgstorage: Initializing images: No such file or directory`,
+  unaffected by the composefs setting either way) has a confirmed root
+  cause straight from bootc's Rust source: it execs `podman images`
+  inside the image being installed to set up its own container storage,
+  and this image never had `podman` installed in it (only the CI host
+  did, to run `podman run <image> bootc install to-disk` in the first
+  place). `skopeo` is used the same way elsewhere in the deploy path.
+  Both are now installed - see the writeup above for the exact source
+  reference. **Not yet re-run in CI as of this writing** - see the
+  Actions history for whether this actually gets the pipeline to a
+  booted VM.
 
 **Net assessment:** the image-level compatibility question - can an
 Ubuntu base satisfy bootc's own contract - is answered *yes*, cleanly,
-and reproducibly. The install/deploy question - does bootc's disk
-installation logic run end-to-end on that image - is still open, blocked
-on one specific, unexplained failure inside bootc itself rather than on
-any Ubuntu-vs-Fedora packaging gap (every prior blocker in this document
-*was* exactly that kind of gap, and each was fixed the same way: find the
-missing tool, confirm the package via packages.ubuntu.com, install it).
-This one doesn't fit that pattern, which is why it's flagged here as a
-distinct, unresolved item rather than folded into the list above as
-"just another missing package."
+and reproducibly. Every blocker hit in the install/deploy path so far has
+turned out to be the same kind of thing: a tool bootc shells out to that
+Fedora-family images carry by default and Ubuntu doesn't (`sfdisk`,
+`mkfs.fat`, now `podman`/`skopeo`) - not an architectural incompatibility.
+Whether that pattern holds all the way to a successful boot, or something
+genuinely architectural (the BLS/grub question this whole project set out
+to test) turns up next, is still open.
 
 Read the Actions run history for current pass/fail state rather than
 assuming this document is up to date with it.
