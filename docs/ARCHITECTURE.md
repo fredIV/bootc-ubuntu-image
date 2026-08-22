@@ -268,6 +268,13 @@ Debian/Ubuntu. Same fix, same reason: a minimal Ubuntu image doesn't carry
 partitioning/formatting tools that a Fedora-family bootc image gets for
 free as part of its base package set.
 
+Third occurrence, past both of those: `Creating imgstorage: Initializing
+images: No such file or directory`. "imgstorage" is bootc's composefs
+storage backend - which this image opted into via `prepare-root.conf`
+above - and it stores deployed container images as EROFS filesystem
+images. `mkfs.erofs` (package `erofs-utils`) wasn't installed, same
+pattern again. Fixed the same way.
+
 Worth being honest about: the earlier bootc-image-builder pivot reasoning
 was built on a wrong diagnosis. The pivot to `bootc install to-disk` was
 still the right call independently (it's the more direct test of the

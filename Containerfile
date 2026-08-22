@@ -87,13 +87,17 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
 #   a minimal Ubuntu image doesn't have it unless asked for explicitly.
 # - dosfstools: provides mkfs.fat, which bootc shells out to directly to
 #   format the EFI System Partition. Not installed by default either.
+# - erofs-utils: provides mkfs.erofs. This image opts into ostree's
+#   composefs backend (see prepare-root.conf below), which stores deployed
+#   images as EROFS - without this, bootc fails initializing its image
+#   storage ("imgstorage") on install.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ostree \
         linux-image-generic \
         dracut \
         grub-efi-amd64-bin grub-common \
         selinux-basics selinux-policy-default policycoreutils \
-        fdisk dosfstools \
+        fdisk dosfstools erofs-utils \
         ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* /var/cache/apt/* /var/cache/debconf/*.dat* /var/log/* /tmp/* /run/*
 
