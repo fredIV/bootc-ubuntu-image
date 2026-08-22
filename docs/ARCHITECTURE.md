@@ -148,6 +148,24 @@ initrd rather than just having the binary present with nothing valid to
 read. Built with `--no-hostonly`, since the build container's hardware
 isn't the target machine's.
 
+## `bootc-image-builder` finding: it doesn't know Ubuntu's default filesystem
+
+Past the `lsinitrd` fix, the next failure was:
+
+```
+error: cannot build manifest: failed to initialize bootc distro: missing required info: DefaultRootFs
+```
+
+`bootc-image-builder` keeps an internal table of known distros
+(Fedora/CentOS/RHEL) with a default root filesystem type for each. Ubuntu
+isn't in that table, so it has nothing to fall back to. This is real
+evidence of the tool being written for a fixed, Fedora-family distro set -
+but it's not a hard wall: the tool ships a `--rootfs` flag precisely for
+images it doesn't recognize (confirmed via its own GitHub issues, e.g.
+"no default root filesystem type specified in container, please use
+'--rootfs' to set manually"). Fixed by passing `--rootfs ext4` explicitly
+in the workflow.
+
 ## Status
 
 Early-stage PoC. Read the Actions run history for current pass/fail state
