@@ -630,6 +630,50 @@ bootc's own docs before adding it, not guessed). Added
 (what the boot-test actually needs) alongside `console=tty0` (so a real,
 non-headless boot keeps a usable display console too).
 
+## Kernel boots fine; dracut has no idea how to find the ostree root
+
+With the console karg in place, the QEMU boot-test finally showed real
+kernel and systemd output for the first time - past every prior failure
+that only ever showed OVMF firmware messages or nothing at all:
+
+```
+[    1.582200] systemd[1]: systemd 257.9-0ubuntu2.5 running in system mode ...
+[    1.725779] systemd[1]: Expecting device dev-disk-by-x2duuid-<uuid>.device ...
+[    3.319197] I/O error, dev fd0, sector 0 op 0x0:(READ) ...
+Generating "/run/initramfs/rdsosreport.txt"
+Entering emergency mode. Exit the shell to continue.
+```
+
+(The `fd0` I/O error is just QEMU's default floppy probe - harmless,
+unrelated.) The real signal: dracut's initramfs waits for a root device
+by UUID using its generic, distro-agnostic "wait for this filesystem"
+path, times out, and drops to an emergency shell. It never had any
+ostree/composefs-specific logic to actually assemble the real root.
+
+Searching ostree's own upstream source (via GitHub code search) for how
+this is supposed to work found `src/boot/dracut/module-setup.sh` - a
+real dracut module named `ostree` that installs the `ostree-prepare-root`
+binary, the ostree config files, and (critically) the
+`ostree-prepare-root.service` systemd unit that does the actual early-boot
+work of mounting the ostree/composefs deployment before the "real" root
+takes over. Its own `check()` function only includes itself in the initrd
+if the `ostree-prepare-root` binary is already present - so dracut wasn't
+failing to find this module, it correctly determined the module wasn't
+needed, because the binary and service unit weren't there to begin with.
+
+Confirmed via Debian's own package file listings (not guessed) that
+Debian/Ubuntu ship this dracut integration in a **separate package**,
+`ostree-boot`, distinct from the base `ostree` package this image already
+installed - `/usr/lib/dracut/modules.d/50ostree/` and
+`ostree-prepare-root.service` both live there. Added `ostree-boot`
+alongside `ostree`, before the dracut initrd-generation step so dracut's
+own module auto-detection picks it up. Same category of finding as
+`systemd-boot-tools`/`fdisk`/`dosfstools`/`podman`/`skopeo` before it - a
+Debian/Ubuntu packaging split Fedora's RPM spec doesn't have, not
+anything architectural about ostree/composefs itself.
+
+**Not yet confirmed via CI as of this writing.**
+
 **Confirmed fixed via CI.** With `systemd-boot-tools` installed, `bootc
 install to-disk --composefs-backend --allow-missing-verity` completed
 end to end for the first time:

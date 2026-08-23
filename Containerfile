@@ -111,8 +111,23 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
 #   Recent Debian (trixie/testing/unstable, which 25.10 tracks closely)
 #   split bootctl out of systemd into this separate package - confirmed
 #   via Debian's own manpage index before adding it, not guessed.
+# - ostree-boot: the actual dracut integration for ostree/composefs -
+#   ships /usr/lib/dracut/modules.d/50ostree/ (dracut's ostree module,
+#   from ostree upstream's own src/boot/dracut/module-setup.sh) and the
+#   ostree-prepare-root.service unit that mounts the real deployment
+#   during early boot. Debian/Ubuntu package this separately from the
+#   base `ostree` package we already had - confirmed via Debian's own
+#   package file listing, not guessed - so our dracut-generated initrd
+#   never included it, and boot-testing showed the kernel and systemd
+#   coming up fine in the initrd, then hanging waiting on a device by
+#   UUID before dropping to an emergency shell: dracut had no ostree/
+#   composefs-aware module to actually assemble the real root, only the
+#   generic "wait for a filesystem UUID" path every distro's dracut
+#   ships by default. Must be installed before the dracut initrd is
+#   built below so dracut's own module auto-detection (`check()` in
+#   module-setup.sh) picks it up.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ostree \
+        ostree ostree-boot \
         linux-image-generic \
         dracut cpio \
         grub-efi-amd64-bin grub-common \
