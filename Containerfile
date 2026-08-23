@@ -144,6 +144,18 @@ RUN ln -sfn default /etc/selinux/targeted
 RUN mkdir -p /usr/lib/bootc/install && \
     printf '[install.filesystem.root]\ntype = "ext4"\n' > /usr/lib/bootc/install/00-ubuntu.toml
 
+# bootc's declarative kernel-argument mechanism (kargs.d), applied at
+# deploy time to whatever bootloader entry gets generated. Without this,
+# the kernel boots with no console= arg at all, so nothing it prints ever
+# reaches a serial port - found after a QEMU boot-test hung silently past
+# UEFI's own "BdsDxe: starting Boot0001" firmware message with zero
+# kernel or bootloader output for the full 5-minute timeout, on a build
+# that had otherwise installed cleanly. tty0 is kept alongside ttyS0 so a
+# real (non-headless) boot still gets console output on the physical
+# display too.
+RUN mkdir -p /usr/lib/bootc/kargs.d && \
+    printf 'kargs = ["console=ttyS0,115200n8", "console=tty0"]\nmatch-architectures = ["x86_64"]\n' > /usr/lib/bootc/kargs.d/01-console.toml
+
 COPY --from=bootc-builder /src/bootc/target/release/bootc /usr/bin/bootc
 
 # --- ostree/bootc filesystem contract -----------------------------------

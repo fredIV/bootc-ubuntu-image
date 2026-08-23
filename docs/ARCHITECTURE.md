@@ -593,6 +593,43 @@ Ubuntu does - not architectural, just another gap in the "what does a
 non-Fedora distro need installed explicitly" list this whole project is
 mapping out.
 
+## No console= kernel arg means QEMU's serial console shows nothing
+
+The OVMF path fix above turned out to need a second attempt - the
+`find`-based search actually located the right files
+(`OVMF_CODE_4M.fd`/`OVMF_VARS_4M.fd`) the very first time, but the
+*previous* commit's `ls file1 file2 2>/dev/null | head -1` version had
+failed anyway: `ls` exits non-zero if *any* argument doesn't exist, even
+when the other one printed fine, and `pipefail` propagated that into
+`set -e` before the correct filename ever got used. Worth noting since
+it looked at first like a wrong filename guess but was actually a
+shell-scripting mistake in how the two guesses were tried together.
+
+With OVMF now resolved correctly, QEMU actually started executing the
+installed disk's UEFI boot entry:
+
+```
+BdsDxe: loading Boot0001 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x4,0x0)
+BdsDxe: starting Boot0001 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x4,0x0)
+```
+
+...then nothing. No bootloader menu, no kernel messages, nothing at all
+for the full 5-minute timeout. OVMF's own firmware messages reaching the
+log confirmed the serial pipe itself works; the silence had to be on the
+guest OS side. The kernel has no `console=` argument at all in this
+image - nothing in the Containerfile ever set one - so with Ubuntu's
+default console routing there's no reason it would ever write to
+`ttyS0`, the port QEMU's `-serial mon:stdio` captures. It may well have
+booted successfully and just be running invisibly.
+
+bootc has its own declarative kernel-argument mechanism for exactly this
+kind of image-level policy: `/usr/lib/bootc/kargs.d/*.toml`, applied at
+deploy time to whatever bootloader entry gets generated (confirmed via
+bootc's own docs before adding it, not guessed). Added
+`/usr/lib/bootc/kargs.d/01-console.toml` with `console=ttyS0,115200n8`
+(what the boot-test actually needs) alongside `console=tty0` (so a real,
+non-headless boot keeps a usable display console too).
+
 **Confirmed fixed via CI.** With `systemd-boot-tools` installed, `bootc
 install to-disk --composefs-backend --allow-missing-verity` completed
 end to end for the first time:
