@@ -40,6 +40,9 @@ architectural versus just Ubuntu/Debian packaging splits.
   test, run on every push.
 - `docs/ARCHITECTURE.md` - why each piece exists, and the known Fedora- vs
   Ubuntu-specific gaps this project has to close.
+- `docs/SPEC.md` - the settled specification: architecture, functional
+  requirements and their status, and an explicit security posture /
+  threat model (what's mitigated, what isn't, and why).
 
 ## Building locally
 
