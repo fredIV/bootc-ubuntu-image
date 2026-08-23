@@ -672,7 +672,59 @@ own module auto-detection picks it up. Same category of finding as
 Debian/Ubuntu packaging split Fedora's RPM spec doesn't have, not
 anything architectural about ostree/composefs itself.
 
-**Not yet confirmed via CI as of this writing.**
+**Wrong fix, confirmed by re-running CI**: `ostree-boot` installed cleanly,
+but the boot-test hit the exact same "Expecting device ...uuid...device"
+timeout and emergency shell, byte for byte. The reason turned out to be
+architectural, not a missing package: `ostree-prepare-root.service` (from
+`ostree-boot`) only drives bootc's *classic* ostree sysroot/deployment
+boot path - this image uses `--composefs-backend`, bootc's separate
+composefs-native install backend, which has its own, completely
+different early-boot mechanism that `ostree-boot` knows nothing about.
+
+## bootc's *own* dracut module - composefs-native's actual boot integration
+
+Since the classic ostree dracut module was the wrong target, the next
+step was finding what the composefs-native backend actually needs.
+`bootc.dev`/`bootc-dev.github.io` are both blocked by this environment's
+egress proxy, so read straight from bootc's own GitHub source instead of
+guessing from search snippets: `docs/src/man/bootc-root-setup.service.5.md`
+describes a oneshot unit that "runs in the initramfs to set up the root
+filesystem when the composefs backend is active," ordered after
+`sysroot.mount` and before `initrd-root-fs.target`, and states plainly
+that it's installed by a `51bootc` dracut module which "is *not* enabled
+by default."
+
+Found the module's actual source at `crates/initramfs/dracut/module-setup.sh`
+in bootc's own repo (a separate, small Rust crate + dracut module,
+entirely distinct from ostree's own). Its `check()` function
+unconditionally returns 255 - dracut's "only include if explicitly
+requested" code - confirming a base image has to opt in, not just have
+the files present. `docs/src/packaging-and-integration.md` and the
+Makefile gave the exact `make install` recipe:
+
+```
+install -D -m 0755 -t $(DESTDIR)/usr/lib/dracut/modules.d/51bootc crates/initramfs/dracut/module-setup.sh
+install -D -m 0755 target/release/bootc-initramfs-setup $(DESTDIR)/usr/lib/bootc/initramfs-setup
+install -D -m 0644 -t $(DESTDIR)/usr/lib/systemd/system crates/initramfs/*.service
+```
+
+This image builds bootc from source but only ever built and copied the
+`bootc` binary itself out of the builder stage - never ran `make
+install`, so none of this ever existed here. Fedora doesn't hit this
+gap because its bootc RPM packages `make install`'s full output, dracut
+module and all; building from source instead meant reproducing that by
+hand: build `bootc-initramfs-setup` (a second binary in the same cargo
+workspace) alongside `bootc` in the builder stage, copy it plus the
+module's own `dracut/module-setup.sh` and `crates/initramfs/*.service`
+straight out of the builder's checkout, and add
+`/etc/dracut.conf.d/50-bootc.conf` with `add_dracutmodules+=" bootc "`
+so dracut's own module system actually requests it instead of silently
+skipping it per its own `check()`.
+
+**Not yet confirmed via CI as of this writing.** If this is right, it's
+the deepest fix in this project so far - not a missing apt package but a
+missing half of bootc's *own* build output that only Fedora's packaging
+currently wires up for you.
 
 **Confirmed fixed via CI.** With `systemd-boot-tools` installed, `bootc
 install to-disk --composefs-backend --allow-missing-verity` completed

@@ -52,7 +52,11 @@ RUN --mount=type=secret,id=gh_token set -eux; \
     git clone --depth 1 --branch "${BOOTC_TAG}" https://github.com/containers/bootc /src/bootc
 
 WORKDIR /src/bootc
-RUN cargo build --release --bin bootc
+# bootc-initramfs-setup: a second binary in the same workspace (crates/
+# initramfs), built here alongside bootc itself so both land in the same
+# target/release/ output - see the dracut module install below for why
+# this one's needed too.
+RUN cargo build --release --bin bootc --bin bootc-initramfs-setup
 
 ########################################
 # Stage 2: the bootc-compatible Ubuntu image
@@ -172,6 +176,37 @@ RUN mkdir -p /usr/lib/bootc/kargs.d && \
     printf 'kargs = ["console=ttyS0,115200n8", "console=tty0"]\nmatch-architectures = ["x86_64"]\n' > /usr/lib/bootc/kargs.d/01-console.toml
 
 COPY --from=bootc-builder /src/bootc/target/release/bootc /usr/bin/bootc
+
+# bootc's own dracut module (crates/initramfs/), separate from and in
+# addition to ostree upstream's dracut module (installed above via the
+# ostree-boot package): that one drives the *classic* ostree sysroot/
+# deployment boot path via ostree-prepare-root.service, but this image
+# uses bootc's *composefs-native* install backend (--composefs-backend),
+# which has its own completely different early-boot unit,
+# bootc-root-setup.service, that mounts the composefs EROFS image
+# directly. Installing ostree-boot alone got the classic module in place
+# but changed nothing for this image, since composefs-native boot never
+# looks at ostree-prepare-root at all - confirmed by hitting the exact
+# same "Expecting device ...uuid...device" timeout/emergency-shell
+# failure again, byte for byte, even with ostree-boot installed.
+#
+# Per bootc's own docs (docs/src/packaging-and-integration.md) and
+# Makefile, this module - "51bootc" - is a `make install` artifact that
+# our from-source build never ran (we only copy the bootc binary itself
+# out of the builder stage), and its own module-setup.sh explicitly
+# returns "never install by default" from its check() function: a distro
+# base image has to opt in via dracut config, not just have the module
+# files present. Reproducing that install by hand here: build the
+# separate bootc-initramfs-setup binary alongside bootc (above), copy it
+# and the module's own dracut/systemd-unit sources straight out of the
+# builder's checkout, and add the dracut.conf.d file that actually
+# requests the module - all confirmed against bootc's own source/build
+# system rather than guessed.
+COPY --from=bootc-builder /src/bootc/crates/initramfs/dracut/module-setup.sh /usr/lib/dracut/modules.d/51bootc/module-setup.sh
+COPY --from=bootc-builder /src/bootc/target/release/bootc-initramfs-setup /usr/lib/bootc/initramfs-setup
+COPY --from=bootc-builder /src/bootc/crates/initramfs/*.service /usr/lib/systemd/system/
+RUN mkdir -p /etc/dracut.conf.d && \
+    printf 'add_dracutmodules+=" bootc "\n' > /etc/dracut.conf.d/50-bootc.conf
 
 # --- ostree/bootc filesystem contract -----------------------------------
 # ostree expects the kernel + initramfs for a deployment to live under
