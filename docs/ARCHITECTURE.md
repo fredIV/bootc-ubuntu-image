@@ -593,7 +593,30 @@ Ubuntu does - not architectural, just another gap in the "what does a
 non-Fedora distro need installed explicitly" list this whole project is
 mapping out.
 
-**Not yet confirmed via CI as of this writing.**
+**Confirmed fixed via CI.** With `systemd-boot-tools` installed, `bootc
+install to-disk --composefs-backend --allow-missing-verity` completed
+end to end for the first time:
+
+```
+Bootloader: systemd
+Installing bootloader via systemd-boot
+Trimming root
+.: 6.8 GiB (7286059008 bytes) trimmed
+Finalizing filesystem root
+Unmounting filesystems
+Installation complete!
+```
+
+That's the install/deploy path this whole project set out to test,
+fully working on an Ubuntu base with no Fedora tooling involved. The
+only remaining failure in that CI run was in the *test harness* itself,
+not bootc or the image: the `boot-test` job's QEMU step failed with
+`cp: cannot stat '/usr/share/OVMF/OVMF_VARS.fd': No such file or
+directory`. Ubuntu's `ovmf` package dropped the plain 2MB
+`OVMF_CODE.fd`/`OVMF_VARS.fd` pflash images as of version 2024.02-1,
+replacing them with 4M-suffixed ones - confirmed via the package's own
+changelog rather than guessed. Updated the workflow to glob for either
+naming so it isn't tied to one runner image's exact package version.
 
 **Net assessment:** the image-level compatibility question - can an
 Ubuntu base satisfy bootc's own contract - is answered *yes*, cleanly,

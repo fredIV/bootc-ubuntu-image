@@ -148,15 +148,24 @@ jobs:
             "${IMAGE}-oci" \
             bootc install to-disk --wipe --composefs-backend --allow-missing-verity "$LOOPDEV"
 
+      # Ubuntu's ovmf package dropped the plain OVMF_CODE.fd/OVMF_VARS.fd
+      # 2MB pflash images as of 2024.02-1, replacing them with 4M-suffixed
+      # ones (OVMF_CODE_4M.fd/OVMF_VARS_4M.fd) - confirmed via the actual
+      # package changelog, not guessed, after this step failed with a bare
+      # "No such file or directory" once install-to-disk itself started
+      # succeeding. Globbing for either name keeps this working regardless
+      # of which the runner's ovmf package happens to ship.
       - name: Boot the installed disk in QEMU and check it comes up
         run: |
           set -euo pipefail
           sudo losetup -d "$LOOPDEV" || true
-          cp /usr/share/OVMF/OVMF_VARS.fd ovmf_vars.fd
+          OVMF_CODE="$(ls /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd 2>/dev/null | head -1)"
+          OVMF_VARS_SRC="$(ls /usr/share/OVMF/OVMF_VARS_4M.fd /usr/share/OVMF/OVMF_VARS.fd 2>/dev/null | head -1)"
+          cp "$OVMF_VARS_SRC" ovmf_vars.fd
           timeout 300 qemu-system-x86_64 \
             -m 2048 -smp 2 \
             -enable-kvm -cpu host \
-            -drive if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE.fd \
+            -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
             -drive if=pflash,format=raw,file=ovmf_vars.fd \
             -drive file=disk.raw,if=virtio,format=raw \
             -nographic -serial mon:stdio \
