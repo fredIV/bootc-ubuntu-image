@@ -721,10 +721,23 @@ straight out of the builder's checkout, and add
 so dracut's own module system actually requests it instead of silently
 skipping it per its own `check()`.
 
-**Not yet confirmed via CI as of this writing.** If this is right, it's
-the deepest fix in this project so far - not a missing apt package but a
-missing half of bootc's *own* build output that only Fedora's packaging
-currently wires up for you.
+**Confirmed via CI - this was the fix.** The previous attempt
+(`ostree-boot`) had installed cleanly but produced the exact same
+"Expecting device ...uuid...device" timeout, byte for byte, because it
+wires up the *classic* ostree boot path that composefs-native never
+touches. With `51bootc` actually in the initramfs, the boot-test job
+went from install to a real login prompt in 38 seconds - well under its
+5-minute timeout:
+
+```
+Ubuntu 25.10 localhost.localdomain ttyS0
+
+localhost login: Boot succeeded
+```
+
+This is the deepest fix in the project - not a missing apt package but
+a missing half of bootc's *own* build output that only Fedora's RPM
+packaging currently wires up for you automatically.
 
 **Confirmed fixed via CI.** With `systemd-boot-tools` installed, `bootc
 install to-disk --composefs-backend --allow-missing-verity` completed
@@ -751,19 +764,59 @@ replacing them with 4M-suffixed ones - confirmed via the package's own
 changelog rather than guessed. Updated the workflow to glob for either
 naming so it isn't tied to one runner image's exact package version.
 
-**Net assessment:** the image-level compatibility question - can an
-Ubuntu base satisfy bootc's own contract - is answered *yes*, cleanly,
-and reproducibly. The install/deploy path has turned out to be a mix of
-both kinds of gap this project set out to distinguish: mostly missing
-packages a Fedora-family image carries for free (`sfdisk`, `mkfs.fat`,
-`podman`/`skopeo`, now `systemd-boot-efi`) - but the bootloader-install
-finding above is the first one that's genuinely architectural rather than
-a missing binary: bootc's classic ostree backend was written assuming
-every target resolves to a BLS-patched grub, and Ubuntu's systemd-boot
-default doesn't fit that assumption at all. Whether bootc's own
-composefs-native backend is a real answer to that, or just trades one
-unfinished path for a different unfinished one, is what the next CI run
-tests.
+## Status: the pipeline is green, end to end
+
+As of [run #30](https://github.com/fredIV/bootc-ubuntu-image/actions/runs/32646473638)
+(commit `a4d36f9`), every stage of this project's original question runs
+clean and reproducibly on a stock GitHub Actions `ubuntu-latest` runner,
+with no Fedora tooling anywhere in the chain:
+
+1. **Build**: an Ubuntu 25.10 base, with `bootc` built from source
+   against Ubuntu's packaged `libostree`, produces a real
+   `containers.bootc=1` image.
+2. **Lint**: `bootc container lint` passes cleanly - the image satisfies
+   bootc's own filesystem/metadata contract (kernel/initrd layout,
+   `/sysroot` + `/ostree`, install config, kargs, labels).
+3. **Install**: `bootc install to-disk --composefs-backend
+   --allow-missing-verity`, invoked the same way it would be on any real
+   machine (`podman run <image> bootc install to-disk ...`), partitions
+   a real disk, formats both filesystems, deploys the container image,
+   installs systemd-boot, and reports `Installation complete!`.
+4. **Boot**: that disk boots under QEMU/KVM with real UEFI firmware
+   (OVMF) straight to a getty login prompt - `Ubuntu 25.10
+   localhost.localdomain ttyS0` / `localhost login:` - with no manual
+   intervention.
+
+**Net assessment.** The original question this repo exists to answer -
+can bootc/ostree's atomic, OCI-image-based OS update model work on an
+Ubuntu base instead of Fedora/RHEL - is answered **yes**, demonstrated
+end to end rather than argued in the abstract. Every gap hit along the
+way fell into one of two buckets, and it's worth being precise about
+which:
+
+- **Packaging gaps** (the majority): tools a Fedora-family bootc image
+  gets for free that Ubuntu splits into separate packages or doesn't
+  ship at all - `fdisk`, `dosfstools`, `podman`/`skopeo`,
+  `systemd-boot-efi`/`systemd-boot-tools`, `ostree-boot`, a `console=`
+  karg, and the OVMF firmware filename drift in the *test harness* (not
+  the image) as Ubuntu's `ovmf` package evolved. None of these are
+  Ubuntu-vs-Fedora architecture questions; they're "what does this
+  distro's packaging assume you already have."
+- **Genuinely architectural gaps** (two, both resolved by routing around
+  them rather than by installing a package): bootc's *classic* ostree
+  install backend has no implemented bootloader-install path for
+  anything but Grub - Ubuntu's systemd-boot default has zero support
+  there - which is what motivated switching to bootc's composefs-native
+  backend (`--composefs-backend`) instead; and that backend's own boot
+  integration (`51bootc`) is a real part of bootc's build output that
+  Fedora's RPM packaging wires up automatically and this from-source
+  Ubuntu build had to reproduce by hand. Also hit one confirmed,
+  still-open upstream bug in the composefs-native backend
+  ([bootc-dev/bootc#1703](https://github.com/bootc-dev/bootc/issues/1703),
+  triggered by pulling a Docker-schema image from a registry) - worked
+  around by reformatting the pulled image to OCI in place before
+  installing.
 
 Read the Actions run history for current pass/fail state rather than
-assuming this document is up to date with it.
+assuming this document is up to date with it - but as of this writing,
+it's green.

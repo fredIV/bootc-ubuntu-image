@@ -21,10 +21,16 @@ question.
 
 ## Status
 
-Early-stage PoC, under active iteration. **The GitHub Actions run history on
-this repo is the source of truth for what currently works** - not this
-README. The pipeline builds the image, lints it for bootc-compatibility,
-converts it to a bootable disk image, and boots it in QEMU/KVM.
+**Working, end to end.** The pipeline builds an Ubuntu 25.10 image, passes
+`bootc container lint`, installs it to a real disk with bootc's own
+`bootc install to-disk --composefs-backend` (no Fedora tooling involved),
+and boots that disk under QEMU/KVM to an actual login prompt - no manual
+intervention. **The GitHub Actions run history on this repo is the source
+of truth** - not this README - but as of this writing it's green
+([latest passing run](https://github.com/fredIV/bootc-ubuntu-image/actions/runs/32646473638)).
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the full list of
+gaps that had to be closed to get there, and which of them were genuinely
+architectural versus just Ubuntu/Debian packaging splits.
 
 ## Layout
 
