@@ -103,14 +103,20 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
 #   the error persisted across every composefs-related theory.
 # - systemd-boot-efi: `bootctl install` (see below) copies its EFI stub
 #   binaries from /usr/lib/systemd/boot/efi/ into the ESP. That directory
-#   only exists if this package is installed; systemd itself (already
-#   pulled in transitively) ships the bootctl binary but not the stub.
+#   only exists if this package is installed.
+# - systemd-boot-tools: provides the bootctl binary itself. Assumed above
+#   to come from the base systemd package (true on older releases), but
+#   bootc's own "No such file or directory (os error 2)" trying to exec
+#   it - a bare ENOENT, not a bootctl-internal error - showed that wrong.
+#   Recent Debian (trixie/testing/unstable, which 25.10 tracks closely)
+#   split bootctl out of systemd into this separate package - confirmed
+#   via Debian's own manpage index before adding it, not guessed.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ostree \
         linux-image-generic \
         dracut cpio \
         grub-efi-amd64-bin grub-common \
-        systemd-boot-efi \
+        systemd-boot-efi systemd-boot-tools \
         selinux-basics selinux-policy-default policycoreutils \
         fdisk dosfstools \
         podman skopeo \

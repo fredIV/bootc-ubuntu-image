@@ -553,14 +553,47 @@ to-disk`. Same blobs, same digests - just OCI-typed metadata instead of
 Docker's - so no extra network fetch, and it directly targets what
 #1703 says triggers the bug.
 
-**Not yet confirmed via CI as of this writing.** If it works, that's
-this PoC's install path reaching a real disk image. If it doesn't, it
-confirms #1703 as a genuine, upstream-acknowledged maturity gap in
-bootc's composefs-native backend - not a Fedora/Ubuntu compatibility
-question at all, since the classic ostree backend's Grub-only bootloader
-support is *also* not Ubuntu-specific once composefs is the only path to
-non-Grub bootloaders. Either outcome is worth recording plainly rather
-than treated as another package to add.
+**Confirmed fixed via CI.** The OCI-reformat workaround worked cleanly -
+the `GetBlob` error is gone entirely, and the pipeline got further than
+ever: through partitioning, both filesystem formats (`mkfs.ext4 -O
+verity`, `mkfs.fat`), bootloader auto-detection, and into
+`install_systemd_boot()` itself - confirming the source-reading
+hypothesis from the previous section was correct, not just plausible.
+
+## bootctl itself is a separate package on recent Debian/Ubuntu
+
+The next failure, right after `Installing bootloader via systemd-boot`:
+
+```
+error: Installing to disk: Setting up composefs boot: Installing
+bootloader: No such file or directory (os error 2)
+```
+
+`install_systemd_boot`'s `#[context("Installing bootloader")]`
+attribute matches this exactly, and "No such file or directory (os
+error 2)" is Rust's characteristic message for a process failing to
+*exec* at all (`ENOENT` from `Command::spawn`) - not bootctl running and
+reporting its own error (which `run_capture_stderr()` would have
+surfaced as readable bootctl output). That distinction mattered: it
+meant `bootctl` itself wasn't found on `$PATH`, not that it ran and hit
+a missing file internally.
+
+The Containerfile had assumed `bootctl` came for free with the base
+`systemd` package (true historically) and only added `systemd-boot-efi`
+for the EFI stub binaries `bootctl install` copies. Checking Debian's
+own manpage index directly (rather than guessing another package name)
+showed that's no longer true: `bootctl`'s manpage lives under
+`systemd-boot-tools` on Debian trixie/testing/unstable, split out of the
+base `systemd` package - and Ubuntu 25.10 tracks that generation of
+Debian's systemd closely. Added `systemd-boot-tools` alongside
+`systemd-boot-efi`. Same category of finding as `fdisk`/`dosfstools`/
+`podman`/`skopeo` before it: a tool a Fedora-family bootc image doesn't
+need to think about (Fedora hasn't made this particular package split),
+Ubuntu does - not architectural, just another gap in the "what does a
+non-Fedora distro need installed explicitly" list this whole project is
+mapping out.
+
+**Not yet confirmed via CI as of this writing.**
 
 **Net assessment:** the image-level compatibility question - can an
 Ubuntu base satisfy bootc's own contract - is answered *yes*, cleanly,
