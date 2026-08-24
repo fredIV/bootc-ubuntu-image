@@ -20,7 +20,7 @@ tension gets written down, not papered over.
 |---|---|---|---|
 | 1 | Pin the Ubuntu base image by digest, not tag | 🟡 In progress | Confirmed working in CI ([run #34](https://github.com/fredIV/bootc-ubuntu-image/actions/runs/32677580100)) - digest is resolved and logged at build time. Committing it as the hardcoded default is the next step, once that value is copied out of a real run - this sandbox can't reach Docker Hub to resolve one by hand |
 | 2 | Vulnerability scanning gate before push | 🟡 In progress, weaker than it looks | Confirmed running in CI via Trivy's own container image pinned by digest (not the `aquasecurity/trivy-action` wrapper - see incident note below). But the scan itself reported it can't meaningfully check this base image at all - see "the scan that can't scan" below. The mechanism is real; its current protective value on `ubuntu:25.10` specifically is close to zero |
-| 3 | Pin third-party GitHub Actions by commit SHA, not version tag | ⬜ Not started | New item, added after the trivy-action incident (below) proved this isn't theoretical. `actions/checkout@v4`, `docker/login-action@v3`, `github/codeql-action/upload-sarif@v3` are all still tag-pinned as of this writing |
+| 3 | Pin third-party GitHub Actions by commit SHA, not version tag | 🟡 In progress | All six `uses:` references in this workflow (`actions/checkout`, `docker/login-action` ×2, `github/codeql-action/upload-sarif`, `actions/upload-artifact`) are now SHA-pinned, with the resolved tag kept as a trailing comment. `codeql-action` was bumped to v4 while at it (the v3 line was already logging a deprecation notice). See the verification note below - this sandbox has no reliable way to query these repos' git data directly, so the SHAs were cross-checked by fetching each release page independently rather than trusted from a single lookup |
 | 4 | Image signing (cosign/sigstore, keyless via GitHub OIDC) | ⬜ Not started | |
 | 5 | Enforce fs-verity instead of `--allow-missing-verity` | ⬜ Not started, likely hard | See "the tension" below — this may not be resolvable inside GitHub Actions' loopback-disk environment at all, only on a real target disk |
 | 6 | SBOM generation, published alongside the image | ⬜ Not started | |
@@ -53,6 +53,29 @@ than picking a tag of it and hoping it stays clean - which is also why
 item 3 above exists now: the same reasoning applies to every other
 tag-pinned Action still in this workflow, this one was just the one
 that got proven.
+
+## How item 3's SHAs were actually verified
+
+This session's GitHub access is scoped to this repo only - no direct
+API access to `actions/checkout`, `docker/login-action`,
+`github/codeql-action`, or `actions/upload-artifact` to read their tag
+data, and `api.github.com` itself is unreachable from here. The SHAs
+committed for item 3 came from fetching each repo's own release page
+and reading the commit hash off it - the same class of lookup that
+went wrong earlier in this branch's history (the first `trivy-action`
+version tag was guessed and didn't exist at all). To not repeat that,
+each one was either cross-checked with a second, independent fetch of
+the same release (`docker/login-action`) or corroborated against an
+earlier, separate search result that agreed on the same hash prefix
+(`actions/checkout`) before being committed. `docker/login-action` and
+`actions/upload-artifact` resolved to releases from early-to-mid 2024,
+while `actions/checkout` and `codeql-action` resolved to releases from
+the past few days - consistent with each project's real release
+cadence rather than a suspiciously uniform "recent-looking" result,
+which is some evidence against a fabricated answer, though not a
+substitute for verifying directly with `gh api` or the GitHub UI. If
+CI fails on any of these with an "unknown revision" style error, that
+means one of them is wrong; check it, don't just retry.
 
 ## The scan that can't scan: item 2's real result
 
