@@ -76,23 +76,45 @@ jobs:
       # pushed. CRITICAL/HIGH findings fail the build outright; results are
       # also uploaded as SARIF so they show up under the repo's Security tab
       # instead of only living in this job's logs.
+      #
+      # Deliberately NOT using the aquasecurity/trivy-action wrapper here:
+      # on 2026-03-19 that exact Action had 75 of its 76 version tags
+      # force-pushed with malicious code that stole CI secrets while scans
+      # kept appearing to succeed (aquasecurity/trivy advisory
+      # GHSA-69fq-xp46-6x23) - a live demonstration of the same "mutable
+      # tag vs. fixed artifact" problem item 1 above exists to fix, just in
+      # a CI dependency instead of the base image. Running Trivy's own
+      # container image directly, pinned to a digest resolved the same way
+      # the Ubuntu base is, removes that Action from the trust chain
+      # entirely rather than just picking a tag of it presumed safe.
+      - name: Resolve Trivy image digest
+        id: trivy
+        run: |
+          set -euo pipefail
+          INSPECT="$(docker buildx imagetools inspect aquasec/trivy:latest)"
+          DIGEST="$(echo "$INSPECT" | awk '/^Digest:/ {print $2; exit}')"
+          if [ -z "$DIGEST" ]; then
+            echo "Could not parse a digest from imagetools inspect output:"
+            echo "$INSPECT"
+            exit 1
+          fi
+          echo "Resolved aquasec/trivy:latest -> $DIGEST"
+          echo "image=aquasec/trivy@${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Export built image for scanning
+        run: docker save local/bootc-ubuntu-image:test -o image.tar
+
       - name: Scan image for known vulnerabilities (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: local/bootc-ubuntu-image:test
-          format: table
-          severity: CRITICAL,HIGH
-          exit-code: "1"
+        run: |
+          docker run --rm -v "$PWD:/work" "${{ steps.trivy.outputs.image }}" \
+            image --input /work/image.tar --severity CRITICAL,HIGH --exit-code 1 --format table
 
       - name: Scan image for known vulnerabilities (Trivy, SARIF for code scanning)
         if: always()
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: local/bootc-ubuntu-image:test
-          format: sarif
-          output: trivy-results.sarif
-          severity: CRITICAL,HIGH
-          exit-code: "0"
+        run: |
+          docker run --rm -v "$PWD:/work" "${{ steps.trivy.outputs.image }}" \
+            image --input /work/image.tar --severity CRITICAL,HIGH --exit-code 0 \
+            --format sarif --output /work/trivy-results.sarif
 
       - name: Upload Trivy results to GitHub code scanning
         if: always()
