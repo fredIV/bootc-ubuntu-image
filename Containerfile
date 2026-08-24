@@ -19,11 +19,17 @@
 # does, at 2025.6. That's why both stages below pin to 25.10 rather than
 # an LTS. See docs/ARCHITECTURE.md for the full version-gap writeup.
 ARG UBUNTU_RELEASE=25.10
+# docs/HARDENING.md item 1: `ubuntu:25.10` is a tag, not a fixed artifact -
+# it can silently repoint to a different image over time. CI resolves the
+# current digest and passes it here as "@sha256:..." (including the "@");
+# left empty, both FROM lines below just resolve to the plain tag, so a
+# local `docker build` without this arg still works unpinned.
+ARG UBUNTU_DIGEST=
 
 ########################################
 # Stage 1: build bootc from source
 ########################################
-FROM ubuntu:${UBUNTU_RELEASE} AS bootc-builder
+FROM ubuntu:${UBUNTU_RELEASE}${UBUNTU_DIGEST} AS bootc-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -61,7 +67,7 @@ RUN cargo build --release --bin bootc --bin bootc-initramfs-setup
 ########################################
 # Stage 2: the bootc-compatible Ubuntu image
 ########################################
-FROM ubuntu:${UBUNTU_RELEASE}
+FROM ubuntu:${UBUNTU_RELEASE}${UBUNTU_DIGEST}
 
 ENV DEBIAN_FRONTEND=noninteractive
 

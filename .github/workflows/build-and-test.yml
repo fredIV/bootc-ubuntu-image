@@ -2,13 +2,16 @@ name: build-and-test
 
 on:
   push:
-    branches: [main]
+    branches: [main, hardening]
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
   packages: write
+  # Needed by the Trivy scan step below to publish results to the repo's
+  # Security tab (Code scanning alerts) rather than just CI logs.
+  security-events: write
 
 jobs:
   build-and-lint:
@@ -26,6 +29,26 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # docs/HARDENING.md item 1: pin the Ubuntu base by digest, not tag.
+      # `ubuntu:25.10` can silently repoint over time; resolving and logging
+      # the digest here at least makes every build's actual base image
+      # visible and auditable in the run log. The Containerfile accepts it
+      # via UBUNTU_DIGEST (empty by default, so local `docker build` without
+      # this step still works unpinned).
+      - name: Resolve Ubuntu base image digest
+        id: base
+        run: |
+          set -euo pipefail
+          INSPECT="$(docker buildx imagetools inspect ubuntu:25.10)"
+          DIGEST="$(echo "$INSPECT" | awk '/^Digest:/ {print $2; exit}')"
+          if [ -z "$DIGEST" ]; then
+            echo "Could not parse a digest from imagetools inspect output:"
+            echo "$INSPECT"
+            exit 1
+          fi
+          echo "Resolved ubuntu:25.10 -> $DIGEST"
+          echo "digest=@${DIGEST}" >> "$GITHUB_OUTPUT"
+
       - name: Build image
         id: meta
         env:
@@ -42,11 +65,40 @@ jobs:
           # api.github.com's harsh unauthenticated rate limit.
           docker build -f Containerfile \
             --secret id=gh_token,env=GH_TOKEN_FOR_BUILD \
+            --build-arg UBUNTU_DIGEST="${{ steps.base.outputs.digest }}" \
             -t "$IMAGE" -t local/bootc-ubuntu-image:test .
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
 
       - name: bootc container lint (explicit, in addition to the in-build check)
         run: docker run --rm local/bootc-ubuntu-image:test bootc container lint
+
+      # docs/HARDENING.md item 2: a vulnerability gate before anything gets
+      # pushed. CRITICAL/HIGH findings fail the build outright; results are
+      # also uploaded as SARIF so they show up under the repo's Security tab
+      # instead of only living in this job's logs.
+      - name: Scan image for known vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: local/bootc-ubuntu-image:test
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+
+      - name: Scan image for known vulnerabilities (Trivy, SARIF for code scanning)
+        if: always()
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: local/bootc-ubuntu-image:test
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Upload Trivy results to GitHub code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
 
       - name: Push image
         if: github.event_name != 'pull_request'
