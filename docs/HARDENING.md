@@ -18,8 +18,8 @@ tension gets written down, not papered over.
 
 | # | Item | Status | Notes |
 |---|---|---|---|
-| 1 | Pin the Ubuntu base image by digest, not tag | 🟡 In progress | CI now resolves and logs the digest at build time (see workflow diff); committing it as the default pin is the next step, once a real resolved value exists in a CI run to copy from — this sandbox can't reach Docker Hub to resolve one by hand |
-| 2 | Vulnerability scanning gate before push | 🟡 In progress | Trivy runs as a CI step, `CRITICAL,HIGH` fails the build, SARIF uploaded to GitHub code scanning — via Trivy's own container image pinned by digest, **not** the `aquasecurity/trivy-action` wrapper (see incident note below) |
+| 1 | Pin the Ubuntu base image by digest, not tag | 🟡 In progress | Confirmed working in CI ([run #34](https://github.com/fredIV/bootc-ubuntu-image/actions/runs/32677580100)) - digest is resolved and logged at build time. Committing it as the hardcoded default is the next step, once that value is copied out of a real run - this sandbox can't reach Docker Hub to resolve one by hand |
+| 2 | Vulnerability scanning gate before push | 🟡 In progress, weaker than it looks | Confirmed running in CI via Trivy's own container image pinned by digest (not the `aquasecurity/trivy-action` wrapper - see incident note below). But the scan itself reported it can't meaningfully check this base image at all - see "the scan that can't scan" below. The mechanism is real; its current protective value on `ubuntu:25.10` specifically is close to zero |
 | 3 | Pin third-party GitHub Actions by commit SHA, not version tag | ⬜ Not started | New item, added after the trivy-action incident (below) proved this isn't theoretical. `actions/checkout@v4`, `docker/login-action@v3`, `github/codeql-action/upload-sarif@v3` are all still tag-pinned as of this writing |
 | 4 | Image signing (cosign/sigstore, keyless via GitHub OIDC) | ⬜ Not started | |
 | 5 | Enforce fs-verity instead of `--allow-missing-verity` | ⬜ Not started, likely hard | See "the tension" below — this may not be resolvable inside GitHub Actions' loopback-disk environment at all, only on a real target disk |
@@ -54,7 +54,34 @@ item 3 above exists now: the same reasoning applies to every other
 tag-pinned Action still in this workflow, this one was just the one
 that got proven.
 
-## The tension worth naming: item 4
+## The scan that can't scan: item 2's real result
+
+The first real run of the Trivy gate ([run #34](https://github.com/fredIV/bootc-ubuntu-image/actions/runs/32677580100))
+reported **0 CRITICAL/HIGH findings** - which reads like a clean bill of
+health, but isn't one. The scan's own log carried this alongside the
+result:
+
+```
+WARN  This OS version is no longer supported by the distribution  family="ubuntu" version="25.10"
+WARN  The vulnerability detection may be insufficient because security updates are not provided
+```
+
+Ubuntu interim releases like 25.10 don't get an ongoing Ubuntu Security
+Notices feed the way LTS releases do, and Trivy's OS-package vulnerability
+matching depends on exactly that feed. "0 findings" here means *nothing
+was checked against current advisory data*, not *nothing was found*. The
+gate is real and will do its job the moment there's a feed for it to
+check against - but as long as this image is built on 25.10, it's
+providing close to no actual assurance for OS-level packages, only for
+anything Trivy's separate secret-scanning and language-ecosystem checks
+would catch.
+
+This makes item 9 (move to a supported release stream) load-bearing for
+item 2 to mean anything, not just a separate, lower-priority item on the
+list - a vulnerability gate on an unsupported OS is closer to a
+compliance checkbox than a real control.
+
+## The tension worth naming: item 5
 
 `--allow-missing-verity` exists because bootc's composefs-native backend
 hard-requires fs-verity-capable storage unless told otherwise, and the
