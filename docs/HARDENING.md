@@ -21,7 +21,7 @@ tension gets written down, not papered over.
 | 1 | Pin the Ubuntu base image by digest, not tag | 🟡 In progress | Confirmed working in CI ([run #34](https://github.com/fredIV/bootc-ubuntu-image/actions/runs/32677580100)) - digest is resolved and logged at build time. Committing it as the hardcoded default is the next step, once that value is copied out of a real run - this sandbox can't reach Docker Hub to resolve one by hand |
 | 2 | Vulnerability scanning gate before push | 🟡 In progress, weaker than it looks | Confirmed running in CI via Trivy's own container image pinned by digest (not the `aquasecurity/trivy-action` wrapper - see incident note below). But the scan itself reported it can't meaningfully check this base image at all - see "the scan that can't scan" below. The mechanism is real; its current protective value on `ubuntu:25.10` specifically is close to zero |
 | 3 | Pin third-party GitHub Actions by commit SHA, not version tag | 🟡 In progress | All six `uses:` references in this workflow (`actions/checkout`, `docker/login-action` ×2, `github/codeql-action/upload-sarif`, `actions/upload-artifact`) are now SHA-pinned, with the resolved tag kept as a trailing comment. `codeql-action` was bumped to v4 while at it (the v3 line was already logging a deprecation notice). See the verification note below - this sandbox has no reliable way to query these repos' git data directly, so the SHAs were cross-checked by fetching each release page independently rather than trusted from a single lookup |
-| 4 | Image signing (cosign/sigstore, keyless via GitHub OIDC) | ⬜ Not started | |
+| 4 | Image signing (cosign/sigstore, keyless via GitHub OIDC) | 🟡 In progress | Pushed image is signed keylessly (`cosign sign`, no private key generated or stored anywhere) and `boot-test` now refuses to install anything that doesn't verify against this repo's own CI identity. Both directions run via cosign's own container image, digest-pinned the same way as Ubuntu/Trivy — see "How item 4 was verified" below |
 | 5 | Enforce fs-verity instead of `--allow-missing-verity` | ⬜ Not started, likely hard | See "the tension" below — this may not be resolvable inside GitHub Actions' loopback-disk environment at all, only on a real target disk |
 | 6 | SBOM generation, published alongside the image | ⬜ Not started | |
 | 7 | Secure Boot / signed bootloader chain | ⬜ Not started | Needs a signed shim + MOK enrollment story; out of scope for a QEMU test loop, real item for real hardware |
@@ -76,6 +76,51 @@ which is some evidence against a fabricated answer, though not a
 substitute for verifying directly with `gh api` or the GitHub UI. If
 CI fails on any of these with an "unknown revision" style error, that
 means one of them is wrong; check it, don't just retry.
+
+## How item 4 was verified
+
+Signing alone isn't a control — it's only one if something refuses to
+proceed when verification fails. So this is two changes, not one: a
+`Sign the pushed image` step at the end of `build-and-lint`, and a
+`Verify the image's cosign signature before installing it` step at the
+*start* of `boot-test`, before anything from the image is trusted enough
+to run `bootc install to-disk` against a real (if loopback) block device.
+
+Both steps run `ghcr.io/sigstore/cosign/cosign`, pinned to a digest
+resolved in CI the same way `ubuntu:25.10` and `aquasec/trivy` are —
+this session has no way to confirm from here that `v3.1.3` is a real,
+existing tag any more than it could confirm the Action SHAs in item 3;
+the workflow will fail loudly and specifically if it isn't, which is
+the same acceptable-verifier tradeoff made there. `v3.1.3` was picked
+deliberately over the `v2.x` line still referenced in cosign's own
+README examples: it backports a fix for
+[GHSA-fx35-mq7g-6g98](https://github.com/sigstore/cosign/security/advisories/GHSA-fx35-mq7g-6g98),
+a signature-verification bypass — using an older, vulnerable version of
+the *verification* tool in the one step whose entire job is verification
+would have undercut the point of adding it.
+
+The signing side is keyless: no private key is generated, stored in a
+GitHub secret, or rotated by anyone. `cosign sign` exchanges the job's
+short-lived OIDC token (`permissions: id-token: write`, scoped only to
+this workflow run) for a Fulcio certificate binding the signature to
+"this exact GitHub Actions workflow, in this exact repo, running off
+this exact ref," and records that in Rekor's public transparency log.
+The verify side checks exactly that binding —
+`--certificate-identity-regexp` against this repo's own path and
+`--certificate-oidc-issuer` pinned to GitHub's own token issuer — so an
+attacker who managed to push a different image to this same GHCR
+repository couldn't also forge a signature that verifies, without also
+compromising this repo's own CI.
+
+What this doesn't yet prove: `bootc install to-disk` itself still
+trusts the image once `boot-test`'s pull happens to hand it the same
+bytes that were just verified — it isn't re-verifying inside the
+podman-installer container. For this CI-loop-back-onto-itself test that
+distinction doesn't matter (it's the same job, same runner, same pull),
+but it would in a real deployment: the gap between "GitHub Actions
+verified this image" and "the machine deploying it verified this image"
+is exactly the kind of thing item 5's fs-verity work would close from a
+different angle, at the filesystem level instead of the registry level.
 
 ## The scan that can't scan: item 2's real result
 

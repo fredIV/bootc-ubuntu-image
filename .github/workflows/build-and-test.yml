@@ -12,12 +12,17 @@ permissions:
   # Needed by the Trivy scan step below to publish results to the repo's
   # Security tab (Code scanning alerts) rather than just CI logs.
   security-events: write
+  # docs/HARDENING.md item 4: needed to mint the short-lived GitHub OIDC
+  # token that cosign exchanges for a Fulcio signing certificate. No
+  # long-lived signing key is stored anywhere in this repo or its secrets.
+  id-token: write
 
 jobs:
   build-and-lint:
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.meta.outputs.image }}
+      digest: ${{ steps.push.outputs.digest }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
 
@@ -123,8 +128,61 @@ jobs:
           sarif_file: trivy-results.sarif
 
       - name: Push image
+        id: push
         if: github.event_name != 'pull_request'
-        run: docker push "${{ steps.meta.outputs.image }}"
+        run: |
+          set -euo pipefail
+          docker push "${{ steps.meta.outputs.image }}"
+          # Re-resolve after pushing so everything downstream (signing,
+          # verification) pins the immutable digest that was actually
+          # pushed, not the mutable "${{ github.sha }}" tag pointing at it.
+          INSPECT="$(docker buildx imagetools inspect "${{ steps.meta.outputs.image }}")"
+          DIGEST="$(echo "$INSPECT" | awk '/^Digest:/ {print $2; exit}')"
+          if [ -z "$DIGEST" ]; then
+            echo "Could not parse a digest from imagetools inspect output:"
+            echo "$INSPECT"
+            exit 1
+          fi
+          echo "Pushed ${{ steps.meta.outputs.image }} -> $DIGEST"
+          echo "digest=$DIGEST" >> "$GITHUB_OUTPUT"
+
+      # docs/HARDENING.md item 4: sign the pushed image so a consumer can
+      # verify it actually came from this repo's own CI, not just that it's
+      # sitting in GHCR. Keyless (no private key generated, stored, or
+      # rotated anywhere): cosign exchanges the job's short-lived GitHub
+      # OIDC token (id-token: write, above) for a ~10-minute Fulcio
+      # certificate binding the signature to "this exact workflow, this
+      # exact repo, this exact ref", then records it in Rekor's public
+      # transparency log. Running cosign's own container image, pinned to
+      # a digest resolved the same way as Ubuntu/Trivy above, for the same
+      # reason: don't add a tag-pinned third-party Action to the trust
+      # chain when a digest-pinned upstream image does the same job.
+      - name: Resolve cosign image digest
+        id: cosign
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          INSPECT="$(docker buildx imagetools inspect ghcr.io/sigstore/cosign/cosign:v3.1.3)"
+          DIGEST="$(echo "$INSPECT" | awk '/^Digest:/ {print $2; exit}')"
+          if [ -z "$DIGEST" ]; then
+            echo "Could not parse a digest from imagetools inspect output:"
+            echo "$INSPECT"
+            exit 1
+          fi
+          echo "Resolved ghcr.io/sigstore/cosign/cosign:v3.1.3 -> $DIGEST"
+          echo "image=ghcr.io/sigstore/cosign/cosign@${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Sign the pushed image (cosign, keyless via GitHub OIDC)
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -e COSIGN_YES=true \
+            -e ACTIONS_ID_TOKEN_REQUEST_TOKEN \
+            -e ACTIONS_ID_TOKEN_REQUEST_URL \
+            -v "$HOME/.docker/config.json:/root/.docker/config.json:ro" \
+            "${{ steps.cosign.outputs.image }}" \
+            sign "${{ steps.meta.outputs.image }}@${{ steps.push.outputs.digest }}"
 
   boot-test:
     needs: build-and-lint
@@ -151,6 +209,34 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      # docs/HARDENING.md item 4, other half: signing an image is only a
+      # control if something actually checks the signature before trusting
+      # the image. This is that check - refusing to install anything that
+      # isn't signed by *this exact repo's* CI, via the same GitHub OIDC
+      # identity the sign step above authenticated as. GHCR image is public,
+      # so no registry credentials are needed to fetch and verify it.
+      - name: Resolve cosign image digest
+        id: cosign
+        run: |
+          set -euo pipefail
+          INSPECT="$(docker buildx imagetools inspect ghcr.io/sigstore/cosign/cosign:v3.1.3)"
+          DIGEST="$(echo "$INSPECT" | awk '/^Digest:/ {print $2; exit}')"
+          if [ -z "$DIGEST" ]; then
+            echo "Could not parse a digest from imagetools inspect output:"
+            echo "$INSPECT"
+            exit 1
+          fi
+          echo "Resolved ghcr.io/sigstore/cosign/cosign:v3.1.3 -> $DIGEST"
+          echo "image=ghcr.io/sigstore/cosign/cosign@${DIGEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify the image's cosign signature before installing it
+        run: |
+          set -euo pipefail
+          docker run --rm "${{ steps.cosign.outputs.image }}" verify \
+            --certificate-identity-regexp "^https://github.com/${{ github.repository }}/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "${{ needs.build-and-lint.outputs.image }}@${{ needs.build-and-lint.outputs.digest }}"
 
       # bootc-image-builder (a Fedora-authored osbuild wrapper, now
       # deprecated upstream in favor of a unified image-builder tool) got
