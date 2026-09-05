@@ -180,7 +180,8 @@ jobs:
             -e COSIGN_YES=true \
             -e ACTIONS_ID_TOKEN_REQUEST_TOKEN \
             -e ACTIONS_ID_TOKEN_REQUEST_URL \
-            -v "$HOME/.docker/config.json:/root/.docker/config.json:ro" \
+            -e DOCKER_CONFIG=/dockercfg \
+            -v "$HOME/.docker:/dockercfg:ro" \
             "${{ steps.cosign.outputs.image }}" \
             sign "${{ steps.meta.outputs.image }}@${{ steps.push.outputs.digest }}"
 
