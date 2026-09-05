@@ -33,9 +33,18 @@ FROM ubuntu:${UBUNTU_RELEASE}${UBUNTU_DIGEST} AS bootc-builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# libclang-dev: this project deliberately builds against bootc's latest
+# upstream release tag rather than a pinned version (see the clone step
+# below), so its dependency tree can and does shift under us. It picked
+# up a transitive dependency on `selinux-sys`, whose build script uses
+# bindgen to generate FFI bindings from libselinux's headers - bindgen
+# needs an actual libclang shared library to do that, which nothing else
+# in this list provides. Without it: "Unable to find libclang" failing
+# the cargo build, found by reading the actual build error rather than
+# guessing.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates curl git pkg-config build-essential \
-        libostree-dev libssl-dev \
+        libostree-dev libssl-dev libclang-dev \
     && rm -rf /var/lib/apt/lists/*
 
 ENV CARGO_HOME=/usr/local/cargo

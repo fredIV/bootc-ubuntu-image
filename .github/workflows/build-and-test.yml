@@ -107,6 +107,7 @@ jobs:
           echo "image=aquasec/trivy@${DIGEST}" >> "$GITHUB_OUTPUT"
 
       - name: Export built image for scanning
+        id: export
         run: docker save local/bootc-ubuntu-image:test -o image.tar
 
       - name: Scan image for known vulnerabilities (Trivy)
@@ -114,15 +115,23 @@ jobs:
           docker run --rm -v "$PWD:/work" "${{ steps.trivy.outputs.image }}" \
             image --input /work/image.tar --severity CRITICAL,HIGH --exit-code 1 --format table
 
+      # if: always() is meant to let the SARIF upload happen even when the
+      # scan above fails the build on a real finding - but plain always()
+      # also fires when the *build itself* failed upstream and nothing
+      # after it ran at all, producing a confusing second failure here
+      # ("docker: invalid reference format" from an empty image ref)
+      # instead of one clear one at the actual point of failure. Gating on
+      # the export step's own outcome keeps always()'s intended behavior
+      # while skipping cleanly when there's no image to scan yet.
       - name: Scan image for known vulnerabilities (Trivy, SARIF for code scanning)
-        if: always()
+        if: always() && steps.export.outcome == 'success'
         run: |
           docker run --rm -v "$PWD:/work" "${{ steps.trivy.outputs.image }}" \
             image --input /work/image.tar --severity CRITICAL,HIGH --exit-code 0 \
             --format sarif --output /work/trivy-results.sarif
 
       - name: Upload Trivy results to GitHub code scanning
-        if: always()
+        if: always() && steps.export.outcome == 'success'
         uses: github/codeql-action/upload-sarif@db488ddef3bf6cb639b32c2e9a7c0a7ea8271d28 # v4.37.8
         with:
           sarif_file: trivy-results.sarif
